@@ -2,7 +2,7 @@
 #include <WiFi.h>
 #include <WebServer.h>
 #include <ArduinoJson.h>
-#include <math.h> // fmax
+#include <math.h>
 
 // ---------------- WiFi ----------------
 const char* ssid     = WIFI_TP_SSID;
@@ -10,11 +10,11 @@ const char* password = WIFI_TP_PASSWORD;
 WebServer server(80);
 
 // ---------------- Motor ----------------
-const int motorPins[] = {14,12,13,15}; // ULN2003 groene draadjes
+const int motorPins[] = {14,12,13,15}; // ULN2003
 int stepIndex = 0;
+long motorPosition = 0; // absolute stappen
 unsigned long previousMicros = 0;
-float stepDelay = 1000; // μs per stap
-bool direction = true;  // true=vooruit, false=achteruit
+float stepAccumulator = 0; // voor vloeiende beweging
 
 const int steps[8][4] = {
   {1,0,0,0},
@@ -27,10 +27,7 @@ const int steps[8][4] = {
   {1,0,0,1}
 };
 
-#define MAX_STEPS_PER_SEC 3000.0  // Hogere max snelheid
-
-// Motor positie
-long motorPosition = 0; // absolute stappositie
+const float MAX_STEPS_PER_SEC = 800; // veilig voor 28BYJ-48
 
 // ---------------- Envelope ----------------
 struct Keyframe {
@@ -49,10 +46,10 @@ const char* htmlPage PROGMEM = R"rawliteral(
 <meta charset="UTF-8">
 <title>Stappenmotor Envelope</title>
 <style>
-  body { background: #121212; color: #eee; font-family: Arial, sans-serif; text-align:center; }
-  canvas { background: #1e1e1e; border: 1px solid #444; margin-top: 20px; }
-  .instructions { margin-top: 10px; color: #00bfff; }
-  .canvas-container { display:flex; justify-content:center; flex-wrap:wrap; gap:20px; }
+body { background: #121212; color: #eee; font-family: Arial, sans-serif; text-align:center; }
+canvas { background: #1e1e1e; border: 1px solid #444; margin-top: 20px; }
+.instructions { margin-top: 10px; color: #00bfff; }
+.canvas-container { display:flex; justify-content:center; flex-wrap:wrap; gap:20px; }
 </style>
 </head>
 <body>
@@ -62,9 +59,7 @@ Klik = punt toevoegen / selecteren. Sleep om te verplaatsen. Dubbelklik = verwij
 </p>
 
 <div class="canvas-container">
-  <!-- Envelope canvas -->
   <canvas id="envelopeCanvas" width="800" height="400"></canvas>
-  <!-- Motorwijzer canvas -->
   <canvas id="motorCanvas" width="200" height="200"></canvas>
 </div>
 
@@ -88,10 +83,11 @@ let selectedPoint = null;
 const maxValue = 100;
 let playStartTime = Date.now();
 
-// ---------- Envelope helpers ----------
+// ---------- Helpers ----------
 function valueToY(val){ return canvas.height/2 - val*(canvas.height/2)/maxValue; }
 function yToValue(y){ return (canvas.height/2 - y) * maxValue/(canvas.height/2); }
 
+// ---------- Draw envelope ----------
 function drawEnvelope(){
   ctx.clearRect(0,0,canvas.width,canvas.height);
 
@@ -102,14 +98,13 @@ function drawEnvelope(){
   ctx.lineTo(canvas.width,canvas.height/2);
   ctx.stroke();
 
-  // Keyframe-lijn
+  // Keyframe lijn
   ctx.strokeStyle="#00bfff";
   ctx.beginPath();
   keyframes.forEach((p,i)=>{
     let x = p.time * canvas.width / keyframes[keyframes.length-1].time;
     let y = valueToY(p.value);
-    if(i==0) ctx.moveTo(x,y);
-    else ctx.lineTo(x,y);
+    if(i==0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
   });
   ctx.stroke();
 
@@ -123,46 +118,40 @@ function drawEnvelope(){
     ctx.fill();
   });
 
-  // Rode tijd-indicator
+  // Rode lijn (current time)
   let elapsed = (Date.now() - playStartTime) % keyframes[keyframes.length-1].time;
   let currentX = elapsed * canvas.width / keyframes[keyframes.length-1].time;
-  ctx.strokeStyle = "#ff0000";
-  ctx.lineWidth = 2;
+  ctx.strokeStyle="#ff0000";
+  ctx.lineWidth=2;
   ctx.beginPath();
   ctx.moveTo(currentX,0);
   ctx.lineTo(currentX,canvas.height);
   ctx.stroke();
-  ctx.lineWidth = 1;
+  ctx.lineWidth=1;
 }
 
 // ---------- Motor wijzer ----------
 function drawMotor(degrees){
-  const centerX = motorCanvas.width/2;
-  const centerY = motorCanvas.height/2;
-  const radius = motorCanvas.width/2 - 10;
-
+  const cx = motorCanvas.width/2, cy = motorCanvas.height/2, r = motorCanvas.width/2 - 10;
   ctxMotor.clearRect(0,0,motorCanvas.width,motorCanvas.height);
 
-  // Cirkel
-  ctxMotor.strokeStyle = "#00bfff";
+  ctxMotor.strokeStyle="#00bfff";
   ctxMotor.lineWidth = 4;
   ctxMotor.beginPath();
-  ctxMotor.arc(centerX, centerY, radius, 0, 2*Math.PI);
+  ctxMotor.arc(cx,cy,r,0,2*Math.PI);
   ctxMotor.stroke();
 
-  // Wijzer
   let rad = (degrees-90)*Math.PI/180;
-  ctxMotor.strokeStyle = "#ff0000";
-  ctxMotor.lineWidth = 3;
+  ctxMotor.strokeStyle="#ff0000";
+  ctxMotor.lineWidth=3;
   ctxMotor.beginPath();
-  ctxMotor.moveTo(centerX, centerY);
-  ctxMotor.lineTo(centerX + radius * Math.cos(rad), centerY + radius * Math.sin(rad));
+  ctxMotor.moveTo(cx,cy);
+  ctxMotor.lineTo(cx+r*Math.cos(rad),cy+r*Math.sin(rad));
   ctxMotor.stroke();
 
-  // Middenpunt
-  ctxMotor.fillStyle = "#fff";
+  ctxMotor.fillStyle="#fff";
   ctxMotor.beginPath();
-  ctxMotor.arc(centerX, centerY, 5,0,2*Math.PI);
+  ctxMotor.arc(cx,cy,5,0,2*Math.PI);
   ctxMotor.fill();
 }
 
@@ -182,8 +171,7 @@ canvas.addEventListener("mousedown",(e)=>{
     let val=yToValue(y);
     keyframes.push({time:t,value:val});
     keyframes.sort((a,b)=>a.time-b.time);
-    drawEnvelope();
-    sendKeyframes();
+    drawEnvelope(); sendKeyframes();
   }
 });
 
@@ -195,8 +183,7 @@ canvas.addEventListener("mousemove",(e)=>{
   selectedPoint.time=x*keyframes[keyframes.length-1].time/canvas.width;
   selectedPoint.value=yToValue(y);
   keyframes.sort((a,b)=>a.time-b.time);
-  drawEnvelope();
-  sendKeyframes();
+  drawEnvelope(); sendKeyframes();
 });
 
 canvas.addEventListener("mouseup",()=>{selectedPoint=null;});
@@ -209,8 +196,7 @@ canvas.addEventListener("dblclick",(e)=>{
     let py=valueToY(p.value);
     return Math.hypot(px-x,py-y)>=8;
   });
-  drawEnvelope();
-  sendKeyframes();
+  drawEnvelope(); sendKeyframes();
 });
 
 function sendKeyframes(){
@@ -221,30 +207,31 @@ function sendKeyframes(){
   });
 }
 
-// ---------- Realtime status ----------
+// ---------- Realtime update ----------
 function updateStatus(){
   let elapsed = (Date.now() - playStartTime) % keyframes[keyframes.length-1].time;
   let val = 0;
   for(let i=0;i<keyframes.length-1;i++){
     if(elapsed >= keyframes[i].time && elapsed <= keyframes[i+1].time){
-      let f = (elapsed - keyframes[i].time) / (keyframes[i+1].time - keyframes[i].time);
+      let f = (elapsed - keyframes[i].time)/(keyframes[i+1].time - keyframes[i].time);
       val = keyframes[i].value + f*(keyframes[i+1].value - keyframes[i].value);
       break;
     }
   }
-  let dir = val>=0 ? "Vooruit" : "Achteruit";
-  let stepsPerSec = Math.round(Math.abs(val)*3000/100);
-  document.getElementById("speedVal").textContent = stepsPerSec;
+  let dir = val>=0 ? "Vooruit":"Achteruit";
+  let stepsPerSec = Math.abs(val)*1300/100;
+  document.getElementById("speedVal").textContent = Math.round(stepsPerSec);
   document.getElementById("dirVal").textContent = dir;
 
-  // Motor wijzer update
   fetch('/position').then(r=>r.json()).then(data=>{
-    drawMotor(data.degrees);
+      drawMotor(data.degrees);
   });
+
+  drawEnvelope();
+  requestAnimationFrame(updateStatus);
 }
 
-setInterval(drawEnvelope,40);
-setInterval(updateStatus,40);
+requestAnimationFrame(updateStatus);
 </script>
 </body>
 </html>
@@ -254,58 +241,65 @@ setInterval(updateStatus,40);
 void setup() {
   Serial.begin(115200);
   for(int i=0;i<4;i++) pinMode(motorPins[i],OUTPUT);
+
   WiFi.setHostname("ESP32-JOEPIE_DE_POEPIE");
   WiFi.begin(ssid,password);
   Serial.print("Verbinden met WiFi");
-  while(WiFi.status()!=WL_CONNECTED){
-    delay(500);
-    Serial.print(".");
-  }
+  while(WiFi.status()!=WL_CONNECTED){ delay(500); Serial.print("."); }
   Serial.println("\nWiFi verbonden!");
   Serial.println(WiFi.localIP());
- 
+
   server.on("/",[](){server.send(200,"text/html",htmlPage);});
   server.on("/envelope",HTTP_POST,handleEnvelope);
   server.on("/position",handlePosition);
   server.begin();
+
   startTime = millis();
+  previousMicros = micros();
 }
 
 // ---------------- Loop ----------------
 void loop() {
   server.handleClient();
 
-  int val = getCurrentValue();           // huidig keyframe value (-100..+100)
-  direction = val>=0;
-
-  // Snelheid: min 300, max 3000 stappen/sec
-  float stepsPerSec = map(abs(val),0,100,300,3000);
-  stepDelay = 1000000.0 / stepsPerSec;
-
   unsigned long now = micros();
-  if(now - previousMicros >= stepDelay){
-    previousMicros = now;
-    for(int i=0;i<4;i++) digitalWrite(motorPins[i],steps[stepIndex][i]);
-    stepIndex += direction?1:-1;
-    if(stepIndex>7) stepIndex=0;
-    if(stepIndex<0) stepIndex=7;
+  int targetVal = getCurrentValue(); // -100..100
+  float speed = abs(targetVal) * MAX_STEPS_PER_SEC / 100.0; // stappen/sec
 
-    // Motor positie bijhouden
-    motorPosition += direction?1:-1;
+  if(speed < 0.1) return; // snelheid te laag → motor stil
+
+  bool direction = targetVal >= 0; // positief = vooruit, negatief = achteruit
+
+  // Bereken aantal stappen sinds vorige update
+  float deltaSec = (now - previousMicros) / 1000000.0;
+  stepAccumulator += speed * deltaSec;
+
+  if(stepAccumulator >= 1.0){
+      int stepsToDo = (int)stepAccumulator;
+      stepAccumulator -= stepsToDo;
+
+      for(int s=0; s<stepsToDo; s++){
+          stepIndex = (stepIndex + (direction ? 1 : 7)) % 8;
+          motorPosition += direction ? 1 : -1;
+          for(int i=0;i<4;i++) digitalWrite(motorPins[i],steps[stepIndex][i]);
+      }
   }
+
+  previousMicros = now;
 }
 
 // ---------------- Envelope ----------------
 void handleEnvelope(){
   if(!server.hasArg("plain")){ server.send(400); return; }
   String body = server.arg("plain");
-  DynamicJsonDocument doc(2048);
+  DynamicJsonDocument doc(4096);
   deserializeJson(doc,body);
   envelopeSize = doc.size();
   for(int i=0;i<envelopeSize;i++){
     envelope[i].time = doc[i]["time"];
     envelope[i].value = doc[i]["value"];
   }
+  if(envelope[envelopeSize-1].time == 0) envelope[envelopeSize-1].time = 8000;
   startTime = millis();
   server.send(200,"text/plain","OK");
 }
@@ -325,7 +319,7 @@ int getCurrentValue(){
 
 // ---------------- Motor position endpoint ----------------
 void handlePosition(){
-  float deg = fmod((motorPosition % 2048) * (360.0 / 2048.0) + 360.0,360.0); // 0-360°
+  float deg = fmod((motorPosition % 4096) * (360.0 / 4096.0) + 360.0,360.0);
   String json = "{";
   json += "\"steps\":" + String(motorPosition) + ",";
   json += "\"degrees\":" + String(deg,1);
