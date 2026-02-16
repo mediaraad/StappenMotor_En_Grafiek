@@ -40,19 +40,19 @@ canvas{background:#1e1e1e;border:2px solid #444;cursor:crosshair;touch-action:no
 input,button,select{height:42px; padding:0 10px; border-radius:4px;border:none;background:#444;color:white;outline:none;font-size:14px;}
 button{background:#00bfff;cursor:pointer;font-weight:bold;}
 button:hover{background:#009cd1;}
-.sync-indicator{width:12px; height:12px; border-radius:50%; background:#444; display:inline-block; margin-right:5px;}
-.sync-active{background:#00ff00; box-shadow: 0 0 8px #00ff00;}
-.status-bar{color:#00bfff;font-family:monospace;margin-bottom:10px;font-size:1.1em;}
-.unsaved{color:#ff9900 !important; font-weight:bold;}
+.btn-delete{background:#ff4444 !important; font-size: 18px;}
+.btn-delete:hover{background:#cc0000 !important;}
+.status-bar{color:#00bfff;font-family:monospace;margin-bottom:15px;font-size:1.2em;}
+.unsaved-text{color:#ff9900; font-weight:bold; margin-left:10px; display:none;}
 textarea{width:800px; height:150px; background:#1e1e1e; color:#00ff00; border:1px solid #444; font-family:monospace; padding:10px; border-radius:4px; margin-top:10px;}
 .footer{margin-top:20px; opacity:0.5; font-size:13px;}
 </style>
 </head>
 <body>
     <h2>Motor Envelope Control <small>v15</small></h2>
+    
     <div class="status-bar">
-        <div id="syncDot" class="sync-indicator"></div>
-        Sync Status: <span id="syncText">Gekoppeld</span> | Preset: <span id="curStatus">-</span>
+        Preset: <span id="curStatus">-</span><span id="unsavedWarning" class="unsaved-text"> (⚠️ Niet opgeslagen!)</span>
     </div>
     
     <div class="controls">
@@ -60,7 +60,7 @@ textarea{width:800px; height:150px; background:#1e1e1e; color:#00ff00; border:1p
         <label>Duur (s):</label>
         <input type="number" id="totalTime" value="8" min="1" style="width:65px;" onchange="updateDuration()">
         <button onclick="savePreset()">Opslaan</button>
-        <button onclick="hardResetSync()" style="background:#ff9900;">Reset Sync</button>
+        <button onclick="deletePreset()" class="btn-delete" title="Verwijder geselecteerde preset">🗑️</button>
         <select id="presetSelect" onchange="autoLoadPreset()"><option>Laden...</option></select>
     </div>
 
@@ -75,40 +75,21 @@ textarea{width:800px; height:150px; background:#1e1e1e; color:#00ff00; border:1p
 const canvas=document.getElementById("envelopeCanvas"), ctx=canvas.getContext("2d"), editor=document.getElementById("jsonEditor");
 let keyframes=[{time:0,value:0},{time:8000,value:0}], selected=null, playStart=Date.now(), lastAutoSync=0;
 let currentLoadedName = "";
+let isUnsaved = false;
+let existingPresets = [];
 
 const toX=(t)=>t*canvas.width/keyframes[keyframes.length-1].time;
 const toY=(v)=>canvas.height/2 - v*(canvas.height/2.2)/100;
 const fromX=(x)=>x*keyframes[keyframes.length-1].time/canvas.width;
 const fromY=(y)=>(canvas.height/2 - y)*100/(canvas.height/2.2);
 
-function markUnsaved() {
-    const txt = document.getElementById("syncText");
-    txt.innerHTML = "⚠️ Niet opgeslagen!";
-    txt.classList.add("unsaved");
-}
-
-function markSaved() {
-    const txt = document.getElementById("syncText");
-    txt.innerHTML = "Gekoppeld";
-    txt.classList.remove("unsaved");
-}
-
-function hardResetSync() {
-    playStart = Date.now();
-    fetch('/reset_clock');
-    flashSyncDot();
-}
-
-function flashSyncDot() {
-    const dot = document.getElementById("syncDot");
-    dot.classList.add("sync-active");
-    setTimeout(() => dot.classList.remove("sync-active"), 200);
-}
+function markUnsaved() { isUnsaved = true; document.getElementById("unsavedWarning").style.display = "inline"; }
+function markSaved() { isUnsaved = false; document.getElementById("unsavedWarning").style.display = "none"; }
+function hardResetSync() { playStart = Date.now(); fetch('/reset_clock'); }
 
 function updateDuration(){
     keyframes[keyframes.length-1].time = document.getElementById("totalTime").value * 1000;
-    markUnsaved();
-    sync();
+    markUnsaved(); sync();
 }
 
 function draw(){
@@ -119,16 +100,9 @@ function draw(){
     ctx.stroke();
     ctx.fillStyle="#ff9900";
     keyframes.forEach(p=>{ctx.beginPath();ctx.arc(toX(p.time),toY(p.value),6,0,7);ctx.fill();});
-    let duration = keyframes[keyframes.length-1].time;
-    let now = Date.now();
-    let elapsed = (now - playStart) % duration;
-    if (elapsed < 50 && (now - lastAutoSync > 1000)) { 
-        fetch('/reset_clock');
-        lastAutoSync = now;
-        flashSyncDot();
-    }
-    ctx.strokeStyle="red"; ctx.lineWidth=2; ctx.beginPath();
-    ctx.moveTo(toX(elapsed),0); ctx.lineTo(toX(elapsed),canvas.height); ctx.stroke();
+    let duration = keyframes[keyframes.length-1].time, now = Date.now(), elapsed = (now - playStart) % duration;
+    if (elapsed < 50 && (now - lastAutoSync > 1000)) { fetch('/reset_clock'); lastAutoSync = now; }
+    ctx.strokeStyle="red"; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(toX(elapsed),0); ctx.lineTo(toX(elapsed),canvas.height); ctx.stroke();
     requestAnimationFrame(draw);
 }
 
@@ -138,8 +112,7 @@ canvas.onmousedown=(e)=>{
     if(!selected){
         keyframes.push({time:fromX(x),value:fromY(y)});
         keyframes.sort((a,b)=>a.time-b.time);
-        markUnsaved();
-        sync();
+        markUnsaved(); sync();
     }
 };
 
@@ -149,8 +122,7 @@ window.onmousemove=(e)=>{
     if(selected!==keyframes[0] && selected!==keyframes[keyframes.length-1]) selected.time=Math.max(1, fromX(e.clientX-rect.left));
     selected.value=Math.max(-100,Math.min(100,fromY(e.clientY-rect.top)));
     keyframes.sort((a,b)=>a.time-b.time);
-    markUnsaved();
-    sync();
+    markUnsaved(); sync();
 };
 window.onmouseup=()=>selected=null;
 
@@ -161,42 +133,47 @@ function sync(){
 }
 
 function applyJson(){
-    try { keyframes = JSON.parse(editor.value); markUnsaved(); sync(); } catch(e){}
+    try { keyframes = JSON.parse(editor.value); markUnsaved(); fetch('/set_live',{method:'POST',body:JSON.stringify(keyframes)}); } catch(e){}
 }
 
 function savePreset(){
-    const name = document.getElementById("filename").value;
+    const name = document.getElementById("filename").value.trim();
     if(!name) return alert("Naam verplicht");
+    
+    if(existingPresets.includes(name) && isUnsaved) {
+        if(!confirm("De preset '" + name + "' bestaat al en bevat wijzigingen. Overschrijven?")) return;
+    }
+
     fetch('/save?name='+name, {method:'POST', body:JSON.stringify(keyframes)}).then(()=>{
-        currentLoadedName = name;
-        updatePresetList(name);
-        markSaved();
+        currentLoadedName = name; updatePresetList(name); markSaved();
     });
+}
+
+function deletePreset() {
+    const sel = document.getElementById("presetSelect");
+    const name = sel.value;
+    if(!name || name === "Laden...") return;
+    if(confirm("Weet je zeker dat je '" + name + "' wilt verwijderen?")) {
+        fetch('/delete?name='+name, {method:'DELETE'}).then(() => updatePresetList());
+    }
 }
 
 function autoLoadPreset(){
     const sel = document.getElementById("presetSelect");
     const name = sel.value;
-    
-    // Check op ongeslagen wijzigingen
-    if(document.getElementById("syncText").classList.contains("unsaved")) {
-        if(!confirm("Je hebt ongeslagen wijzigingen. Doorgaan met laden van '" + name + "'?")) {
-            sel.value = currentLoadedName; // Zet dropdown terug naar de huidige preset
-            return;
+    if(isUnsaved) {
+        if(!confirm("Niet opgeslagen wijzigingen gaan verloren. Doorgaan?")) {
+            sel.value = currentLoadedName; return;
         }
     }
-    
     fetch('/load?name='+name).then(r=>r.json()).then(data=>{
-        keyframes = data; 
-        currentLoadedName = name;
-        sync(); 
-        hardResetSync(); 
-        markSaved();
+        keyframes = data; currentLoadedName = name; sync(); hardResetSync(); markSaved();
     });
 }
 
 async function updatePresetList(targetName = null){
     const list = await fetch('/list').then(r=>r.json());
+    existingPresets = list;
     if(!targetName) targetName = await fetch('/get_active_name').then(r=>r.text());
     currentLoadedName = targetName;
     const sel = document.getElementById("presetSelect");
@@ -207,6 +184,7 @@ async function updatePresetList(targetName = null){
         sel.appendChild(opt);
     });
     document.getElementById("curStatus").textContent = targetName || "Geen";
+    document.getElementById("filename").value = targetName || "";
 }
 
 fetch('/get_active').then(r=>r.json()).then(data=>{
@@ -218,7 +196,7 @@ fetch('/get_active').then(r=>r.json()).then(data=>{
 </html>
 )rawliteral";
 
-// --- C++ Backend (Onveranderd) ---
+// --- C++ Backend ---
 
 void loadFromJSON(String json) {
   DynamicJsonDocument doc(4096);
@@ -242,24 +220,23 @@ void setup() {
   WiFi.begin(ssid_home, pass_home);
 
   server.on("/", []() { server.send(200, "text/html", htmlPage); });
-  
-  server.on("/reset_clock", [](){
-    startTime = millis();
-    server.send(200, "text/plain", "Synced");
-  });
-
-  server.on("/set_live", HTTP_POST, [](){
-    if(server.hasArg("plain")) loadFromJSON(server.arg("plain"));
-    server.send(200);
-  });
+  server.on("/reset_clock", [](){ startTime = millis(); server.send(200, "text/plain", "OK"); });
+  server.on("/set_live", HTTP_POST, [](){ if(server.hasArg("plain")) loadFromJSON(server.arg("plain")); server.send(200); });
   
   server.on("/save", HTTP_POST, [](){
     String name = server.arg("name"); String data = server.arg("plain");
     File f1 = LittleFS.open("/" + name + ".json", "w"); f1.print(data); f1.close();
     File f2 = LittleFS.open("/active.json", "w"); f2.print(data); f2.close();
     File f3 = LittleFS.open("/active_name.txt", "w"); f3.print(name); f3.close();
-    startTime = millis();
-    server.send(200);
+    startTime = millis(); server.send(200);
+  });
+
+  server.on("/delete", HTTP_DELETE, [](){
+    String name = server.arg("name");
+    if(LittleFS.exists("/" + name + ".json")) {
+        LittleFS.remove("/" + name + ".json");
+        server.send(200);
+    } else server.send(404);
   });
 
   server.on("/load", HTTP_GET, [](){
@@ -304,9 +281,7 @@ void setup() {
 
 void loop() {
   server.handleClient();
-
   unsigned long t = (millis() - startTime) % loopDuration;
-
   float currentVal = 0;
   for (int i = 0; i < envelopeSize - 1; i++) {
     if (t >= envelope[i].time && t <= envelope[i + 1].time) {
@@ -315,7 +290,6 @@ void loop() {
       break;
     }
   }
-
   float speedFactor = abs(currentVal) / 100.0;
   if (speedFactor > 0.02) {
     unsigned long stepInterval = 1000000.0 / (speedFactor * MAX_STEPS_PER_SEC);
@@ -324,7 +298,5 @@ void loop() {
       stepIndex = (currentVal > 0) ? (stepIndex + 1) % 8 : (stepIndex + 7) % 8;
       for (int i = 0; i < 4; i++) digitalWrite(motorPins[i], steps[stepIndex][i]);
     }
-  } else {
-    for (int i = 0; i < 4; i++) digitalWrite(motorPins[i], LOW);
-  }
+  } else { for (int i = 0; i < 4; i++) digitalWrite(motorPins[i], LOW); }
 }
