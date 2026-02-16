@@ -32,7 +32,7 @@ const char* htmlPage PROGMEM = R"rawliteral(
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Stepper Pro v15 - Master Sync</title>
+<title>Stepper Pro v15 - Mediaraad</title>
 <style>
 body{background:#121212;color:#eee;font-family:sans-serif;text-align:center;margin:0;padding:20px;}
 canvas{background:#1e1e1e;border:2px solid #444;cursor:crosshair;touch-action:none;display:block;margin:20px auto;border-radius:8px;}
@@ -43,7 +43,9 @@ button:hover{background:#009cd1;}
 .sync-indicator{width:12px; height:12px; border-radius:50%; background:#444; display:inline-block; margin-right:5px;}
 .sync-active{background:#00ff00; box-shadow: 0 0 8px #00ff00;}
 .status-bar{color:#00bfff;font-family:monospace;margin-bottom:10px;font-size:1.1em;}
+.unsaved{color:#ff9900 !important; font-weight:bold;}
 textarea{width:800px; height:150px; background:#1e1e1e; color:#00ff00; border:1px solid #444; font-family:monospace; padding:10px; border-radius:4px; margin-top:10px;}
+.footer{margin-top:20px; opacity:0.5; font-size:13px;}
 </style>
 </head>
 <body>
@@ -65,14 +67,31 @@ textarea{width:800px; height:150px; background:#1e1e1e; color:#00ff00; border:1p
     <canvas id="envelopeCanvas" width="800" height="400"></canvas>
     <textarea id="jsonEditor" spellcheck="false" oninput="applyJson()"></textarea>
 
+    <div class="footer">
+        &copy; <a href='https://github.com/mediaraad' target='_blank' style='color:#00bfff; text-decoration:none;'>Mediaraad</a>
+    </div>
+
 <script>
 const canvas=document.getElementById("envelopeCanvas"), ctx=canvas.getContext("2d"), editor=document.getElementById("jsonEditor");
 let keyframes=[{time:0,value:0},{time:8000,value:0}], selected=null, playStart=Date.now(), lastAutoSync=0;
+let currentLoadedName = "";
 
 const toX=(t)=>t*canvas.width/keyframes[keyframes.length-1].time;
 const toY=(v)=>canvas.height/2 - v*(canvas.height/2.2)/100;
 const fromX=(x)=>x*keyframes[keyframes.length-1].time/canvas.width;
 const fromY=(y)=>(canvas.height/2 - y)*100/(canvas.height/2.2);
+
+function markUnsaved() {
+    const txt = document.getElementById("syncText");
+    txt.innerHTML = "⚠️ Niet opgeslagen!";
+    txt.classList.add("unsaved");
+}
+
+function markSaved() {
+    const txt = document.getElementById("syncText");
+    txt.innerHTML = "Gekoppeld";
+    txt.classList.remove("unsaved");
+}
 
 function hardResetSync() {
     playStart = Date.now();
@@ -88,37 +107,28 @@ function flashSyncDot() {
 
 function updateDuration(){
     keyframes[keyframes.length-1].time = document.getElementById("totalTime").value * 1000;
+    markUnsaved();
     sync();
 }
 
 function draw(){
     ctx.clearRect(0,0,canvas.width,canvas.height);
     ctx.strokeStyle="#333"; ctx.beginPath(); ctx.moveTo(0,canvas.height/2); ctx.lineTo(canvas.width,canvas.height/2); ctx.stroke();
-    
-    // Grafieklijn
     ctx.strokeStyle="#00bfff"; ctx.lineWidth=3; ctx.beginPath();
     keyframes.forEach((p,i)=> i?ctx.lineTo(toX(p.time),toY(p.value)):ctx.moveTo(toX(p.time),toY(p.value)));
     ctx.stroke();
-
-    // Punten
     ctx.fillStyle="#ff9900";
     keyframes.forEach(p=>{ctx.beginPath();ctx.arc(toX(p.time),toY(p.value),6,0,7);ctx.fill();});
-
     let duration = keyframes[keyframes.length-1].time;
     let now = Date.now();
     let elapsed = (now - playStart) % duration;
-
-    // MASTER SYNC LOGICA: Reset ESP32 klok bij elke nieuwe ronde (t=0)
     if (elapsed < 50 && (now - lastAutoSync > 1000)) { 
         fetch('/reset_clock');
         lastAutoSync = now;
         flashSyncDot();
     }
-
-    // Rode tijdslijn
     ctx.strokeStyle="red"; ctx.lineWidth=2; ctx.beginPath();
     ctx.moveTo(toX(elapsed),0); ctx.lineTo(toX(elapsed),canvas.height); ctx.stroke();
-    
     requestAnimationFrame(draw);
 }
 
@@ -128,6 +138,7 @@ canvas.onmousedown=(e)=>{
     if(!selected){
         keyframes.push({time:fromX(x),value:fromY(y)});
         keyframes.sort((a,b)=>a.time-b.time);
+        markUnsaved();
         sync();
     }
 };
@@ -138,6 +149,7 @@ window.onmousemove=(e)=>{
     if(selected!==keyframes[0] && selected!==keyframes[keyframes.length-1]) selected.time=Math.max(1, fromX(e.clientX-rect.left));
     selected.value=Math.max(-100,Math.min(100,fromY(e.clientY-rect.top)));
     keyframes.sort((a,b)=>a.time-b.time);
+    markUnsaved();
     sync();
 };
 window.onmouseup=()=>selected=null;
@@ -149,25 +161,44 @@ function sync(){
 }
 
 function applyJson(){
-    try { keyframes = JSON.parse(editor.value); sync(); } catch(e){}
+    try { keyframes = JSON.parse(editor.value); markUnsaved(); sync(); } catch(e){}
 }
 
 function savePreset(){
     const name = document.getElementById("filename").value;
     if(!name) return alert("Naam verplicht");
-    fetch('/save?name='+name, {method:'POST', body:JSON.stringify(keyframes)}).then(()=>updatePresetList(name));
+    fetch('/save?name='+name, {method:'POST', body:JSON.stringify(keyframes)}).then(()=>{
+        currentLoadedName = name;
+        updatePresetList(name);
+        markSaved();
+    });
 }
 
 function autoLoadPreset(){
-    const name = document.getElementById("presetSelect").value;
+    const sel = document.getElementById("presetSelect");
+    const name = sel.value;
+    
+    // Check op ongeslagen wijzigingen
+    if(document.getElementById("syncText").classList.contains("unsaved")) {
+        if(!confirm("Je hebt ongeslagen wijzigingen. Doorgaan met laden van '" + name + "'?")) {
+            sel.value = currentLoadedName; // Zet dropdown terug naar de huidige preset
+            return;
+        }
+    }
+    
     fetch('/load?name='+name).then(r=>r.json()).then(data=>{
-        keyframes = data; sync(); hardResetSync();
+        keyframes = data; 
+        currentLoadedName = name;
+        sync(); 
+        hardResetSync(); 
+        markSaved();
     });
 }
 
 async function updatePresetList(targetName = null){
     const list = await fetch('/list').then(r=>r.json());
     if(!targetName) targetName = await fetch('/get_active_name').then(r=>r.text());
+    currentLoadedName = targetName;
     const sel = document.getElementById("presetSelect");
     sel.innerHTML = list.length ? "" : "<option>Geen presets</option>";
     list.forEach(f => {
@@ -187,7 +218,7 @@ fetch('/get_active').then(r=>r.json()).then(data=>{
 </html>
 )rawliteral";
 
-// --- C++ Backend ---
+// --- C++ Backend (Onveranderd) ---
 
 void loadFromJSON(String json) {
   DynamicJsonDocument doc(4096);
@@ -197,7 +228,7 @@ void loadFromJSON(String json) {
     envelope[i].time = doc[i]["time"];
     envelope[i].value = (float)doc[i]["value"];
   }
-  loopDuration = envelope[envelopeSize - 1].time;
+  loopDuration = (envelopeSize > 1) ? envelope[envelopeSize - 1].time : 8000;
 }
 
 void setup() {
@@ -274,10 +305,8 @@ void setup() {
 void loop() {
   server.handleClient();
 
-  // BEREKEN POSITIE OP BASIS VAN INTERNE KLOK
   unsigned long t = (millis() - startTime) % loopDuration;
 
-  // ZOEK WAAR DE RODE LIJN NU DE BLAUWE LIJN KRUIST
   float currentVal = 0;
   for (int i = 0; i < envelopeSize - 1; i++) {
     if (t >= envelope[i].time && t <= envelope[i + 1].time) {
@@ -287,7 +316,6 @@ void loop() {
     }
   }
 
-  // MOTOR AANSTURING (ON THE FLY)
   float speedFactor = abs(currentVal) / 100.0;
   if (speedFactor > 0.02) {
     unsigned long stepInterval = 1000000.0 / (speedFactor * MAX_STEPS_PER_SEC);
