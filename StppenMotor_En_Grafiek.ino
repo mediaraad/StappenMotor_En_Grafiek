@@ -31,45 +31,75 @@ const char* htmlPage PROGMEM = R"rawliteral(
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Stepper Pro v15.4</title>
+<title>Stepper Pro v15.9</title>
 <style>
 body{background:#121212;color:#eee;font-family:sans-serif;text-align:center;margin:0;padding:20px;}
 canvas{background:#1e1e1e;border:2px solid #444;cursor:pointer;touch-action:none;display:block;margin:5px auto;border-radius:8px;}
-.controls{background:#2a2a2a;padding:15px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;gap:10px;margin-bottom:10px;border:1px solid #444;flex-wrap:wrap;}
+.controls{background:#2a2a2a;padding:15px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;gap:10px;margin:0 auto 10px auto;border:1px solid #444;flex-wrap:wrap;max-width:800px;box-sizing:border-box;}
 input,button,select{height:42px; padding:0 10px; border-radius:4px;border:none;background:#444;color:white;outline:none;font-size:14px;}
-button{background:#00bfff;cursor:pointer;font-weight:bold;}
-button:hover{background:#009cd1;}
-.btn-delete{background:#ff4444 !important;}
+button{background:#00bfff;cursor:pointer;font-weight:bold;transition:0.2s;}
+button:hover{background:#009cd1;transform:translateY(-1px);}
+.btn-delete{background:#ff4444 !important; font-size:18px;}
 .btn-alt{background:#666 !important;}
 .unsaved-container{height: 20px;}
 .unsaved-text{color:#ff9900; font-weight:bold; font-size: 11px; display:none;}
 textarea{width:800px; height:150px; background:#1e1e1e; color:#00ff00; border:1px solid #444; font-family:monospace; padding:10px; border-radius:4px; margin-top:10px;}
+#customModal{display:none; position:fixed; z-index:1000; left:0; top:0; width:100%; height:100%; background:rgba(0,0,0,0.8); backdrop-filter:blur(4px);}
+.modal-content{background:#2a2a2a; margin:15% auto; padding:25px; border:1px solid #00bfff; width:320px; border-radius:12px; box-shadow:0 0 20px rgba(0,191,255,0.2); animation: slideIn 0.3s ease-out;}
+@keyframes slideIn { from{transform:translateY(-20px);opacity:0;} to{transform:translateY(0);opacity:1;} }
+.modal-btns{display:flex; justify-content:center; gap:15px; margin-top:20px;}
+.modal-text{font-size:16px; margin-bottom:10px; line-height:1.4;}
 </style>
 </head>
 <body>
     <h2>Motor Envelope Control</h2>
     <div class="controls">
         <select id="presetSelect" onchange="autoLoadPreset()"><option>Laden...</option></select>
-        <button onclick="deletePreset()" class="btn-delete">Wissen</button>
-        <span style="border-left:1px solid #444;height:30px;margin:0 10px;"></span>
-        <input type="text" id="filename" placeholder="Naam...">
-        <label>Duur (s):</label>
-        <input type="number" id="totalTime" value="8" min="1" style="width:60px;" onchange="updateDuration()">
-        <button onclick="savePreset()">Opslaan op ESP</button>
-        <span style="border-left:1px solid #444;height:30px;margin:0 10px;"></span>
-        <button onclick="downloadConfig()" class="btn-alt">Download 💾</button>
-        <button onclick="document.getElementById('fileInput').click()" class="btn-alt">Upload 📂</button>
+        <button onclick="confirmAction('delete')" class="btn-delete" title="Verwijder van ESP">🗑️</button>
+        <span style="border-left:1px solid #444;height:30px;margin:0 5px;"></span>
+        <input type="text" id="filename" placeholder="Naam..." style="width:100px;">
+        <label>Duur:</label>
+        <input type="number" id="totalTime" value="8" min="1" style="width:50px;" onchange="updateDuration()">
+        <button onclick="savePreset()">Opslaan</button>
+        <span style="border-left:1px solid #444;height:30px;margin:0 5px;"></span>
+        <button onclick="downloadConfig()" class="btn-alt" title="Download naar PC">💾</button>
+        <button onclick="document.getElementById('fileInput').click()" class="btn-alt" title="Upload vanaf PC">📂</button>
         <input type="file" id="fileInput" style="display:none" onchange="handleFileUpload(event)" accept=".json">
     </div>
     <div class="unsaved-container"><span id="unsavedWarning" class="unsaved-text">WIJZIGINGEN NOG NIET OPGESLAGEN</span></div>
     <canvas id="envelopeCanvas" width="800" height="400"></canvas>
     <textarea id="jsonEditor" spellcheck="false" oninput="applyJson()"></textarea>
 
+    <div id="customModal">
+        <div class="modal-content">
+            <div id="modalText" class="modal-text">Weet je het zeker?</div>
+            <div class="modal-btns">
+                <button id="modalConfirm" style="background:#00bfff;">Ja</button>
+                <button onclick="closeModal()" class="btn-alt">Annuleer</button>
+            </div>
+        </div>
+    </div>
+
 <script>
 const canvas=document.getElementById("envelopeCanvas"), ctx=canvas.getContext("2d"), editor=document.getElementById("jsonEditor");
 let keyframes=[{time:0,value:0},{time:8000,value:0}], selected=null, playStart=Date.now();
 let isDraggingPlayhead = false, manualTime = 0, isUnsaved = false, lastFetchTime = 0;
 const UPDATE_INTERVAL = 60; 
+
+let modalResolve;
+function openModal(text) {
+    document.getElementById("modalText").innerText = text;
+    document.getElementById("customModal").style.display = "block";
+    return new Promise(resolve => { modalResolve = resolve; });
+}
+function closeModal() {
+    document.getElementById("customModal").style.display = "none";
+    if(modalResolve) modalResolve(false);
+}
+document.getElementById("modalConfirm").onclick = () => {
+    document.getElementById("customModal").style.display = "none";
+    if(modalResolve) modalResolve(true);
+};
 
 const toX=(t)=>t*canvas.width/keyframes[keyframes.length-1].time;
 const toY=(v)=>canvas.height/2 - v*(canvas.height/2.2)/100;
@@ -156,8 +186,6 @@ async function handleFileUpload(event) {
         try {
             const uploadedData = JSON.parse(e.target.result);
             let baseName = file.name.replace(".json", "");
-            
-            // Controleer op dubbele namen in de huidige lijst
             const existingPresets = await fetch('/list').then(r => r.json());
             let finalName = baseName;
             let counter = 1;
@@ -165,20 +193,16 @@ async function handleFileUpload(event) {
                 finalName = baseName + "_" + counter;
                 counter++;
             }
-
-            // Sla direct op naar ESP32 met de (nieuwe) naam
             await fetch('/save?name=' + finalName, {method: 'POST', body: JSON.stringify(uploadedData)});
-            
-            // Laad de nieuwe preset direct in de editor
             keyframes = uploadedData;
             markSaved();
             sync();
             updatePresetList(finalName);
-            alert("Opgeslagen als: " + finalName);
+            document.getElementById("filename").value = ""; 
         } catch(err) { alert("Fout bij uploaden: " + err); }
     };
     reader.readAsText(file);
-    event.target.value = ""; // Reset input
+    event.target.value = "";
 }
 
 function sync(){ 
@@ -189,21 +213,52 @@ function sync(){
 
 function applyJson(){ try { keyframes = JSON.parse(editor.value); markUnsaved(); sync(); } catch(e){} }
 
-function savePreset(){
+async function savePreset(){
     const name = document.getElementById("filename").value.trim();
     if(!name) return alert("Naam verplicht");
+    const list = await fetch('/list').then(r=>r.json());
+    if(list.includes(name)) {
+        const ok = await openModal("Naam '" + name + "' bestaat al. Overschrijven?");
+        if(!ok) return;
+    }
     fetch('/save?name='+name, {method:'POST', body:JSON.stringify(keyframes)}).then(()=>{
         document.getElementById("filename").value = ""; updatePresetList(name); markSaved();
     });
 }
 
-function deletePreset() {
-    if(confirm("Wissen?")) fetch('/delete?name='+document.getElementById("presetSelect").value, {method:'DELETE'}).then(() => updatePresetList());
+async function deletePreset() {
+    const name = document.getElementById("presetSelect").value;
+    if(!name || name === "Geen presets" || name === "Laden...") return;
+    const ok = await openModal("Zeker weten dat je '" + name + "' wilt wissen?");
+    if(ok) {
+        fetch('/delete?name=' + name, {method:'DELETE'}).then(() => {
+            updatePresetList().then(() => {
+                autoLoadPreset(true); 
+            });
+        });
+    }
 }
 
-function autoLoadPreset(){
-    fetch('/load?name='+document.getElementById("presetSelect").value).then(r=>r.json()).then(data=>{
+async function confirmAction(type) { if(type === 'delete') await deletePreset(); }
+
+let lastSelectedValue = "";
+async function autoLoadPreset(force = false){
+    const sel = document.getElementById("presetSelect");
+    const val = sel.value;
+    if(!val || val === "Geen presets" || val === "Laden...") return;
+
+    if(!force && isUnsaved) {
+        const ok = await openModal("Wijzigingen niet opgeslagen. Doorgaan?");
+        if(!ok) {
+            sel.value = lastSelectedValue; // Reset dropdown naar vorige stand
+            return;
+        }
+    }
+
+    lastSelectedValue = val;
+    fetch('/load?name=' + val).then(r=>r.json()).then(data=>{
         keyframes = data; sync(); playStart = Date.now(); fetch('/reset_clock_to?t=0'); markSaved();
+        document.getElementById("filename").value = ""; // Veld leegmaken na laden
     });
 }
 
@@ -214,7 +269,7 @@ async function updatePresetList(targetName = null){
     sel.innerHTML = list.length ? "" : "<option>Geen presets</option>";
     list.forEach(f => {
         let opt = document.createElement("option"); opt.value = f; opt.textContent = f;
-        if(f === targetName) opt.selected = true;
+        if(f === targetName) { opt.selected = true; lastSelectedValue = f; }
         sel.appendChild(opt);
     });
 }
@@ -236,7 +291,7 @@ fetch('/get_active').then(r=>r.json()).then(data=>{ if(data.length > 0) keyframe
 </html>
 )rawliteral";
 
-// --- C++ BACKEND ---
+// --- C++ BACKEND (ongewijzigd) ---
 void loadFromJSON(String json) {
   DynamicJsonDocument doc(4096);
   if (deserializeJson(doc, json)) return;
@@ -253,13 +308,10 @@ void setup() {
   for (int i = 0; i < 4; i++) pinMode(motorPins[i], OUTPUT);
   LittleFS.begin(true);
   if (LittleFS.exists("/active.json")) loadFromJSON(LittleFS.open("/active.json", "r").readString());
-
   WiFi.mode(WIFI_AP_STA);
   WiFi.softAP(ap_ssid, ap_pass);
   WiFi.begin(ssid_home, pass_home);
-
   if (MDNS.begin("motor")) { Serial.println("mDNS gestart"); }
-
   server.on("/", []() { server.send(200, "text/html", htmlPage); });
   server.on("/reset_clock_to", [](){
     if(server.hasArg("t")) { startTime = millis() - server.arg("t").toInt(); manualOverride = false; }
