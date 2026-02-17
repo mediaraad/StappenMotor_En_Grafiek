@@ -34,27 +34,30 @@ const char* htmlPage PROGMEM = R"rawliteral(
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Stepper Pro v16.3</title>
+<title>Stepper Pro v16.5</title>
 <style>
 body{background:#121212;color:#eee;font-family:sans-serif;text-align:center;margin:0;padding:20px;}
 canvas{background:#1e1e1e;border:2px solid #444;cursor:pointer;touch-action:none;display:block;margin:5px auto;border-radius:8px;}
-.controls{background:#2a2a2a;padding:15px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;gap:10px;margin:0 auto 10px auto;border:1px solid #444;flex-wrap:wrap;max-width:800px;box-sizing:border-box;}
+.controls{background:#2a2a2a;padding:15px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;gap:10px;margin:0 auto 10px auto;border:1px solid #444;flex-wrap:wrap;max-width:850px;box-sizing:border-box;}
 input,button,select{height:42px; padding:0 10px; border-radius:4px;border:none;background:#444;color:white;outline:none;font-size:14px;}
 button{background:#00bfff;cursor:pointer;font-weight:bold;transition:0.2s;}
 button:hover{background:#009cd1;}
 .btn-delete{background:#ff4444 !important;}
 .btn-alt{background:#666 !important;}
+.btn-new{background:#28a745 !important;} /* Groene kleur voor Nieuw */
 .unsaved-container{height: 20px;}
 .unsaved-text{color:#ff9900; font-weight:bold; font-size: 11px; display:none;}
 textarea{width:800px; height:100px; background:#1e1e1e; color:#00ff00; border:1px solid #444; font-family:monospace; margin-top:10px;}
 #customModal{display:none; position:fixed; z-index:1000; left:0; top:0; width:100%; height:100%; background:rgba(0,0,0,0.8); backdrop-filter:blur(4px);}
-.modal-content{background:#2a2a2a; margin:15% auto; padding:25px; border:1px solid #00bfff; width:320px; border-radius:12px; box-shadow:0 0 20px rgba(0,191,255,0.2);}
+.modal-content{background:#2a2a2a; margin:15% auto; padding:25px; border:1px solid #00bfff; width:320px; border-radius:12px;}
 .modal-btns{display:flex; justify-content:center; gap:15px; margin-top:20px;}
 </style>
 </head>
 <body>
-    <h2>Motor Envelope Control</h2>
+    <h2 id="pageTitle">Motor Control</h2>
     <div class="controls">
+        <button onclick="createNew()" class="btn-new">➕ Nieuw</button>
+        <span style="border-left:1px solid #444;height:30px;margin:0 5px;"></span>
         <select id="presetSelect" onchange="autoLoadPreset()"><option>Laden...</option></select>
         <button onclick="deletePreset()" class="btn-delete">🗑️</button>
         <span style="border-left:1px solid #444;height:30px;margin:0 5px;"></span>
@@ -104,6 +107,26 @@ const fromY=(y)=>(canvas.height/2 - y)*100/(canvas.height/2.2);
 
 function markUnsaved() { isUnsaved = true; document.getElementById("unsavedWarning").style.display = "inline-block"; }
 function markSaved() { isUnsaved = false; document.getElementById("unsavedWarning").style.display = "none"; }
+
+function sync(){ 
+    editor.value = JSON.stringify(keyframes, null, 2);
+    document.getElementById("totalTime").value = Math.round(keyframes[keyframes.length-1].time / 1000);
+    return fetch('/set_live',{method:'POST',body:JSON.stringify(keyframes)}); 
+}
+
+// Nieuwe functie voor schone lei
+async function createNew() {
+    if(isUnsaved) {
+        if(!await openModal("Huidige wijzigingen gaan verloren. Doorgaan?")) return;
+    }
+    keyframes = [{time:0,value:0},{time:8000,value:0}];
+    document.getElementById("filename").value = "";
+    document.getElementById("presetSelect").selectedIndex = -1; // Deselecteer huidige preset
+    markUnsaved();
+    sync();
+    playStart = Date.now();
+    fetch('/reset_clock_to?t=0');
+}
 
 function draw(){
     ctx.clearRect(0,0,canvas.width,canvas.height);
@@ -159,12 +182,6 @@ function updateManualPos(x) {
     }
 }
 
-function sync(){ 
-    editor.value = JSON.stringify(keyframes, null, 2);
-    document.getElementById("totalTime").value = Math.round(keyframes[keyframes.length-1].time / 1000);
-    fetch('/set_live',{method:'POST',body:JSON.stringify(keyframes)}); 
-}
-
 function applyJson(){ try { keyframes = JSON.parse(editor.value); markUnsaved(); sync(); } catch(e){} }
 
 async function savePreset(){
@@ -191,8 +208,11 @@ async function autoLoadPreset(force = false){
     if(!force && isUnsaved) { if(!await openModal("Wijzigingen niet opgeslagen. Doorgaan?")) { sel.value = lastSelectedValue; return; } }
     lastSelectedValue = sel.value;
     fetch('/load?name=' + sel.value).then(r=>r.json()).then(data=>{
-        keyframes = data; sync(); playStart = Date.now(); fetch('/reset_clock_to?t=0'); markSaved();
-        document.getElementById("filename").value = ""; 
+        keyframes = data; 
+        sync().then(() => { 
+            playStart = Date.now(); fetch('/reset_clock_to?t=0'); markSaved();
+            document.getElementById("filename").value = ""; 
+        });
     });
 }
 
@@ -231,26 +251,19 @@ async function handleFileUpload(event) {
             const uploadedData = JSON.parse(e.target.result);
             let baseName = file.name.replace(".json", "");
             const existingPresets = await fetch('/list').then(r => r.json());
-            
-            // Slimme doortel-logica
             let finalName = baseName;
             if (existingPresets.includes(finalName)) {
                 let counter = 1;
                 finalName = baseName + "_" + counter;
-                while (existingPresets.includes(finalName)) {
-                    counter++;
-                    finalName = baseName + "_" + counter;
-                }
+                while (existingPresets.includes(finalName)) { counter++; finalName = baseName + "_" + counter; }
             }
-            
             await fetch('/save?name=' + finalName, {method: 'POST', body: JSON.stringify(uploadedData)});
-            keyframes = uploadedData; markSaved(); sync();
-            await updatePresetList(finalName); 
-            document.getElementById("filename").value = "";
+            keyframes = uploadedData; 
+            sync().then(() => { markSaved(); updatePresetList(finalName); document.getElementById("filename").value = ""; });
         } catch(err) { alert("Fout bij uploaden"); }
     };
     reader.readAsText(file);
-    event.target.value = ""; // Reset input zodat je hetzelfde bestand opnieuw kunt kiezen
+    event.target.value = "";
 }
 
 fetch('/get_active').then(r=>r.json()).then(data=>{ if(data.length > 0) keyframes = data; sync(); updatePresetList(); draw(); });
@@ -259,7 +272,7 @@ fetch('/get_active').then(r=>r.json()).then(data=>{ if(data.length > 0) keyframe
 </html>
 )rawliteral";
 
-// --- C++ BACKEND ---
+// --- C++ BACKEND (ongewijzigd) ---
 void loadFromJSON(String json) {
   DynamicJsonDocument doc(4096);
   if (deserializeJson(doc, json)) return;
