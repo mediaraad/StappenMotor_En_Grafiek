@@ -12,7 +12,7 @@ const char* ap_pass = "12345678";
 
 WebServer server(80);
 
-// --- Motor Config ---
+// --- Motor Config (v15 stabiel) ---
 const int motorPins[] = {14, 12, 13, 15}; 
 int stepIndex = 0;
 unsigned long lastStepMicros = 0;
@@ -47,29 +47,41 @@ button:hover{background:#009cd1;}
 .unsaved-container{height: 20px; margin-bottom: 2px;}
 .unsaved-text{color:#ff9900; font-weight:bold; font-size: 11px; display:none; font-family:monospace; letter-spacing: 1px;}
 textarea{width:800px; height:150px; background:#1e1e1e; color:#00ff00; border:1px solid #444; font-family:monospace; padding:10px; border-radius:4px; margin-top:10px;}
+.footer{margin-top:20px; opacity:0.5; font-size:13px;}
 </style>
 </head>
 <body>
     <h2>Motor Envelope Control <small>v15</small></h2>
+    
     <div class="controls">
         <select id="presetSelect" onchange="autoLoadPreset()"><option>Laden...</option></select>
-        <button onclick="deletePreset()" class="btn-delete">🗑️</button>
+        <button onclick="deletePreset()" class="btn-delete" title="Verwijder geselecteerde preset">🗑️</button>
         <span style="margin: 0 15px; border-left: 1px solid #444; height: 30px;"></span>
         <input type="text" id="filename" placeholder="Nieuwe naam..." style="width:120px;">
         <label>Duur (s):</label>
         <input type="number" id="totalTime" value="8" min="1" style="width:65px;" onchange="updateDuration()">
         <button onclick="savePreset()">Opslaan</button>
     </div>
+
     <div class="unsaved-container">
         <span id="unsavedWarning" class="unsaved-text">⚠️ WIJZIGINGEN NOG NIET OPGESLAGEN</span>
     </div>
+
     <canvas id="envelopeCanvas" width="800" height="400"></canvas>
     <textarea id="jsonEditor" spellcheck="false" oninput="applyJson()"></textarea>
+
+    <div class="footer">
+        &copy; <a href='https://github.com/mediaraad' target='_blank' style='color:#00bfff; text-decoration:none;'>Mediaraad</a>
+    </div>
 
 <script>
 const canvas=document.getElementById("envelopeCanvas"), ctx=canvas.getContext("2d"), editor=document.getElementById("jsonEditor");
 let keyframes=[{time:0,value:0},{time:8000,value:0}], selected=null, playStart=Date.now(), lastAutoSync=0;
-let isDraggingPlayhead = false, manualTime = 0, isUnsaved = false;
+let isDraggingPlayhead = false;
+let manualTime = 0;
+let isUnsaved = false;
+let lastFetchTime = 0;
+const UPDATE_INTERVAL = 60; // ms limiet om vastlopen te voorkomen
 
 const toX=(t)=>t*canvas.width/keyframes[keyframes.length-1].time;
 const toY=(v)=>canvas.height/2 - v*(canvas.height/2.2)/100;
@@ -101,18 +113,31 @@ canvas.onmousedown=(e)=>{
     const rect=canvas.getBoundingClientRect(), x=e.clientX-rect.left, y=e.clientY-rect.top;
     let duration = keyframes[keyframes.length-1].time;
     let currentElapsed = (Date.now() - playStart) % duration;
-    if(Math.abs(x - toX(currentElapsed)) < 25) { isDraggingPlayhead = true; updateManualPos(x); return; }
+    
+    // Grijp de rode lijn (playhead)
+    if(Math.abs(x - toX(currentElapsed)) < 30) { 
+        isDraggingPlayhead = true; 
+        updateManualPos(x); 
+        return; 
+    }
+
     selected=keyframes.find(p=>Math.hypot(toX(p.time)-x,toY(p.value)-y)<15);
-    if(!selected){ keyframes.push({time:fromX(x),value:fromY(y)}); keyframes.sort((a,b)=>a.time-b.time); markUnsaved(); sync(); }
+    if(!selected){
+        keyframes.push({time:fromX(x),value:fromY(y)});
+        keyframes.sort((a,b)=>a.time-b.time);
+        markUnsaved(); sync();
+    }
 };
 
 window.onmousemove=(e)=>{
-    const rect=canvas.getBoundingClientRect(), x=e.clientX-rect.left;
+    const rect=canvas.getBoundingClientRect();
+    const x = e.clientX-rect.left;
     if(isDraggingPlayhead) { updateManualPos(x); return; }
     if(!selected) return;
     if(selected!==keyframes[0] && selected!==keyframes[keyframes.length-1]) selected.time=Math.max(1, fromX(x));
     selected.value=Math.max(-100,Math.min(100,fromY(e.clientY-rect.top)));
-    keyframes.sort((a,b)=>a.time-b.time); markUnsaved(); sync();
+    keyframes.sort((a,b)=>a.time-b.time);
+    markUnsaved(); sync();
 };
 
 window.onmouseup=()=>{
@@ -124,23 +149,31 @@ window.onmouseup=()=>{
 };
 
 function updateManualPos(x) {
+    let now = Date.now();
     let duration = keyframes[keyframes.length-1].time;
     manualTime = Math.max(0, Math.min(duration, fromX(x)));
-    let val = 0;
-    for (let i = 0; i < keyframes.length - 1; i++) {
-        if (manualTime >= keyframes[i].time && manualTime <= keyframes[i+1].time) {
-            let f = (manualTime - keyframes[i].time) / (keyframes[i+1].time - keyframes[i].time);
-            val = keyframes[i].value + f * (keyframes[i+1].value - keyframes[i].value);
-            break;
+    
+    if (now - lastFetchTime > UPDATE_INTERVAL) {
+        lastFetchTime = now;
+        let val = 0;
+        for (let i = 0; i < keyframes.length - 1; i++) {
+            if (manualTime >= keyframes[i].time && manualTime <= keyframes[i+1].time) {
+                let f = (manualTime - keyframes[i].time) / (keyframes[i+1].time - keyframes[i].time);
+                val = keyframes[i].value + f * (keyframes[i+1].value - keyframes[i].value);
+                break;
+            }
         }
+        fetch('/set_manual?v=' + val.toFixed(2));
     }
-    fetch('/set_manual?v=' + val.toFixed(2));
 }
 
 canvas.ondblclick=(e)=>{
     const rect=canvas.getBoundingClientRect(), x=e.clientX-rect.left, y=e.clientY-rect.top;
     const index = keyframes.findIndex(p => Math.hypot(toX(p.time)-x, toY(p.value)-y) < 15);
-    if(index > 0 && index < keyframes.length - 1){ keyframes.splice(index, 1); markUnsaved(); sync(); }
+    if(index > 0 && index < keyframes.length - 1){
+        keyframes.splice(index, 1);
+        markUnsaved(); sync();
+    }
 };
 
 function sync(){ 
@@ -149,23 +182,30 @@ function sync(){
     fetch('/set_live',{method:'POST',body:JSON.stringify(keyframes)}); 
 }
 
-function applyJson(){ try { keyframes = JSON.parse(editor.value); markUnsaved(); sync(); } catch(e){} }
+function applyJson(){
+    try { keyframes = JSON.parse(editor.value); markUnsaved(); sync(); } catch(e){}
+}
+
 function savePreset(){
     const name = document.getElementById("filename").value.trim();
     if(!name) return alert("Naam verplicht");
     fetch('/save?name='+name, {method:'POST', body:JSON.stringify(keyframes)}).then(()=>{
-        document.getElementById("filename").value = ""; updatePresetList(name); markSaved();
+        document.getElementById("filename").value = ""; 
+        updatePresetList(name); markSaved();
     });
 }
+
 function deletePreset() {
     const sel = document.getElementById("presetSelect");
     if(confirm("Wissen?")) fetch('/delete?name='+sel.value, {method:'DELETE'}).then(() => updatePresetList());
 }
+
 function autoLoadPreset(){
     fetch('/load?name='+document.getElementById("presetSelect").value).then(r=>r.json()).then(data=>{
         keyframes = data; sync(); playStart = Date.now(); fetch('/reset_clock_to?t=0'); markSaved();
     });
 }
+
 async function updatePresetList(targetName = null){
     const list = await fetch('/list').then(r=>r.json());
     if(!targetName) targetName = await fetch('/get_active_name').then(r=>r.text());
@@ -177,6 +217,12 @@ async function updatePresetList(targetName = null){
         sel.appendChild(opt);
     });
 }
+
+function updateDuration(){
+    keyframes[keyframes.length-1].time = document.getElementById("totalTime").value * 1000;
+    markUnsaved(); sync();
+}
+
 fetch('/get_active').then(r=>r.json()).then(data=>{ if(data.length > 0) keyframes = data; sync(); updatePresetList(); draw(); });
 </script>
 </body>
@@ -208,11 +254,9 @@ void setup() {
 
   server.on("/", []() { server.send(200, "text/html", htmlPage); });
   
-  // Nieuwe sync endpoint
   server.on("/reset_clock_to", [](){
     if(server.hasArg("t")) {
-      unsigned long targetT = server.arg("t").toInt();
-      startTime = millis() - targetT;
+      startTime = millis() - server.arg("t").toInt();
       manualOverride = false; 
     }
     server.send(200);
