@@ -35,15 +35,15 @@ const char* htmlPage PROGMEM = R"rawliteral(
 <title>Stepper Pro v15 - Mediaraad</title>
 <style>
 body{background:#121212;color:#eee;font-family:sans-serif;text-align:center;margin:0;padding:20px;}
-canvas{background:#1e1e1e;border:2px solid #444;cursor:crosshair;touch-action:none;display:block;margin:20px auto;border-radius:8px;}
+canvas{background:#1e1e1e;border:2px solid #444;cursor:crosshair;touch-action:none;display:block;margin:5px auto;border-radius:8px;}
 .controls{background:#2a2a2a;padding:15px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;gap:10px;margin-bottom:10px;border:1px solid #444;flex-wrap:wrap;}
 input,button,select{height:42px; padding:0 10px; border-radius:4px;border:none;background:#444;color:white;outline:none;font-size:14px;}
 button{background:#00bfff;cursor:pointer;font-weight:bold;}
 button:hover{background:#009cd1;}
 .btn-delete{background:#ff4444 !important; font-size: 18px;}
 .btn-delete:hover{background:#cc0000 !important;}
-.status-bar{color:#00bfff;font-family:monospace;margin-bottom:15px;font-size:1.2em;}
-.unsaved-text{color:#ff9900; font-weight:bold; margin-left:10px; display:none;}
+.unsaved-container{height: 20px; margin-bottom: 2px;}
+.unsaved-text{color:#ff9900; font-weight:bold; font-size: 11px; display:none; font-family:monospace; letter-spacing: 1px;}
 textarea{width:800px; height:150px; background:#1e1e1e; color:#00ff00; border:1px solid #444; font-family:monospace; padding:10px; border-radius:4px; margin-top:10px;}
 .footer{margin-top:20px; opacity:0.5; font-size:13px;}
 </style>
@@ -51,17 +51,18 @@ textarea{width:800px; height:150px; background:#1e1e1e; color:#00ff00; border:1p
 <body>
     <h2>Motor Envelope Control <small>v15</small></h2>
     
-    <div class="status-bar">
-        Preset: <span id="curStatus">-</span><span id="unsavedWarning" class="unsaved-text"> (⚠️ Niet opgeslagen!)</span>
-    </div>
-    
     <div class="controls">
-        <input type="text" id="filename" placeholder="Naam preset" style="width:120px;">
+        <select id="presetSelect" onchange="autoLoadPreset()"><option>Laden...</option></select>
+        <button onclick="deletePreset()" class="btn-delete" title="Verwijder geselecteerde preset">🗑️</button>
+        <span style="margin: 0 15px; border-left: 1px solid #444; height: 30px;"></span>
+        <input type="text" id="filename" placeholder="Nieuwe naam..." style="width:120px;">
         <label>Duur (s):</label>
         <input type="number" id="totalTime" value="8" min="1" style="width:65px;" onchange="updateDuration()">
         <button onclick="savePreset()">Opslaan</button>
-        <button onclick="deletePreset()" class="btn-delete" title="Verwijder geselecteerde preset">🗑️</button>
-        <select id="presetSelect" onchange="autoLoadPreset()"><option>Laden...</option></select>
+    </div>
+
+    <div class="unsaved-container">
+        <span id="unsavedWarning" class="unsaved-text">⚠️ WIJZIGINGEN NOG NIET OPGESLAGEN</span>
     </div>
 
     <canvas id="envelopeCanvas" width="800" height="400"></canvas>
@@ -83,7 +84,7 @@ const toY=(v)=>canvas.height/2 - v*(canvas.height/2.2)/100;
 const fromX=(x)=>x*keyframes[keyframes.length-1].time/canvas.width;
 const fromY=(y)=>(canvas.height/2 - y)*100/(canvas.height/2.2);
 
-function markUnsaved() { isUnsaved = true; document.getElementById("unsavedWarning").style.display = "inline"; }
+function markUnsaved() { isUnsaved = true; document.getElementById("unsavedWarning").style.display = "inline-block"; }
 function markSaved() { isUnsaved = false; document.getElementById("unsavedWarning").style.display = "none"; }
 function hardResetSync() { playStart = Date.now(); fetch('/reset_clock'); }
 
@@ -105,6 +106,15 @@ function draw(){
     ctx.strokeStyle="red"; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(toX(elapsed),0); ctx.lineTo(toX(elapsed),canvas.height); ctx.stroke();
     requestAnimationFrame(draw);
 }
+
+canvas.ondblclick=(e)=>{
+    const rect=canvas.getBoundingClientRect(), x=e.clientX-rect.left, y=e.clientY-rect.top;
+    const index = keyframes.findIndex(p => Math.hypot(toX(p.time)-x, toY(p.value)-y) < 15);
+    if(index > 0 && index < keyframes.length - 1){
+        keyframes.splice(index, 1);
+        markUnsaved(); sync();
+    }
+};
 
 canvas.onmousedown=(e)=>{
     const rect=canvas.getBoundingClientRect(), x=e.clientX-rect.left, y=e.clientY-rect.top;
@@ -138,14 +148,12 @@ function applyJson(){
 
 function savePreset(){
     const name = document.getElementById("filename").value.trim();
-    if(!name) return alert("Naam verplicht");
-    
-    if(existingPresets.includes(name) && isUnsaved) {
-        if(!confirm("De preset '" + name + "' bestaat al en bevat wijzigingen. Overschrijven?")) return;
-    }
-
+    if(!name) return alert("Geef een naam op voor de nieuwe preset");
     fetch('/save?name='+name, {method:'POST', body:JSON.stringify(keyframes)}).then(()=>{
-        currentLoadedName = name; updatePresetList(name); markSaved();
+        currentLoadedName = name; 
+        document.getElementById("filename").value = ""; 
+        updatePresetList(name); 
+        markSaved();
     });
 }
 
@@ -183,8 +191,7 @@ async function updatePresetList(targetName = null){
         if(f === targetName) opt.selected = true;
         sel.appendChild(opt);
     });
-    document.getElementById("curStatus").textContent = targetName || "Geen";
-    document.getElementById("filename").value = targetName || "";
+    document.getElementById("filename").value = ""; 
 }
 
 fetch('/get_active').then(r=>r.json()).then(data=>{
@@ -196,8 +203,7 @@ fetch('/get_active').then(r=>r.json()).then(data=>{
 </html>
 )rawliteral";
 
-// --- C++ Backend ---
-
+// --- C++ Backend (Onveranderd) ---
 void loadFromJSON(String json) {
   DynamicJsonDocument doc(4096);
   if (deserializeJson(doc, json)) return;
@@ -233,10 +239,8 @@ void setup() {
 
   server.on("/delete", HTTP_DELETE, [](){
     String name = server.arg("name");
-    if(LittleFS.exists("/" + name + ".json")) {
-        LittleFS.remove("/" + name + ".json");
-        server.send(200);
-    } else server.send(404);
+    if(LittleFS.exists("/" + name + ".json")) { LittleFS.remove("/" + name + ".json"); server.send(200); } 
+    else server.send(404);
   });
 
   server.on("/load", HTTP_GET, [](){
