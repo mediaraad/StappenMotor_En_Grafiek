@@ -5,13 +5,16 @@
 #include <ArduinoJson.h>
 #include <LittleFS.h>
 
+// --- Instellingen ---
 const char* ssid_home = WIFI_TP_SSID;
 const char* pass_home = WIFI_TP_PASSWORD;
-const char* ap_ssid = "Motor-Control-Pro";
-const char* ap_pass = "12345678"; 
+const char* ap_ssid   = "Motor-Control-Pro";
+const char* ap_pass   = "12345678"; 
+const char* mdns_name = "motor";
 
 WebServer server(80);
 
+// --- Motor Config ---
 const int motorPins[] = {14, 12, 13, 15}; 
 int stepIndex = 0;
 unsigned long lastStepMicros = 0;
@@ -31,39 +34,37 @@ const char* htmlPage PROGMEM = R"rawliteral(
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Stepper Pro v15.9</title>
+<title>Stepper Pro v16.3</title>
 <style>
 body{background:#121212;color:#eee;font-family:sans-serif;text-align:center;margin:0;padding:20px;}
 canvas{background:#1e1e1e;border:2px solid #444;cursor:pointer;touch-action:none;display:block;margin:5px auto;border-radius:8px;}
 .controls{background:#2a2a2a;padding:15px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;gap:10px;margin:0 auto 10px auto;border:1px solid #444;flex-wrap:wrap;max-width:800px;box-sizing:border-box;}
 input,button,select{height:42px; padding:0 10px; border-radius:4px;border:none;background:#444;color:white;outline:none;font-size:14px;}
 button{background:#00bfff;cursor:pointer;font-weight:bold;transition:0.2s;}
-button:hover{background:#009cd1;transform:translateY(-1px);}
-.btn-delete{background:#ff4444 !important; font-size:18px;}
+button:hover{background:#009cd1;}
+.btn-delete{background:#ff4444 !important;}
 .btn-alt{background:#666 !important;}
 .unsaved-container{height: 20px;}
 .unsaved-text{color:#ff9900; font-weight:bold; font-size: 11px; display:none;}
-textarea{width:800px; height:150px; background:#1e1e1e; color:#00ff00; border:1px solid #444; font-family:monospace; padding:10px; border-radius:4px; margin-top:10px;}
+textarea{width:800px; height:100px; background:#1e1e1e; color:#00ff00; border:1px solid #444; font-family:monospace; margin-top:10px;}
 #customModal{display:none; position:fixed; z-index:1000; left:0; top:0; width:100%; height:100%; background:rgba(0,0,0,0.8); backdrop-filter:blur(4px);}
-.modal-content{background:#2a2a2a; margin:15% auto; padding:25px; border:1px solid #00bfff; width:320px; border-radius:12px; box-shadow:0 0 20px rgba(0,191,255,0.2); animation: slideIn 0.3s ease-out;}
-@keyframes slideIn { from{transform:translateY(-20px);opacity:0;} to{transform:translateY(0);opacity:1;} }
+.modal-content{background:#2a2a2a; margin:15% auto; padding:25px; border:1px solid #00bfff; width:320px; border-radius:12px; box-shadow:0 0 20px rgba(0,191,255,0.2);}
 .modal-btns{display:flex; justify-content:center; gap:15px; margin-top:20px;}
-.modal-text{font-size:16px; margin-bottom:10px; line-height:1.4;}
 </style>
 </head>
 <body>
     <h2>Motor Envelope Control</h2>
     <div class="controls">
         <select id="presetSelect" onchange="autoLoadPreset()"><option>Laden...</option></select>
-        <button onclick="confirmAction('delete')" class="btn-delete" title="Verwijder van ESP">🗑️</button>
+        <button onclick="deletePreset()" class="btn-delete">🗑️</button>
         <span style="border-left:1px solid #444;height:30px;margin:0 5px;"></span>
         <input type="text" id="filename" placeholder="Naam..." style="width:100px;">
         <label>Duur:</label>
         <input type="number" id="totalTime" value="8" min="1" style="width:50px;" onchange="updateDuration()">
         <button onclick="savePreset()">Opslaan</button>
         <span style="border-left:1px solid #444;height:30px;margin:0 5px;"></span>
-        <button onclick="downloadConfig()" class="btn-alt" title="Download naar PC">💾</button>
-        <button onclick="document.getElementById('fileInput').click()" class="btn-alt" title="Upload vanaf PC">📂</button>
+        <button onclick="downloadConfig()" class="btn-alt">💾</button>
+        <button onclick="document.getElementById('fileInput').click()" class="btn-alt">📂</button>
         <input type="file" id="fileInput" style="display:none" onchange="handleFileUpload(event)" accept=".json">
     </div>
     <div class="unsaved-container"><span id="unsavedWarning" class="unsaved-text">WIJZIGINGEN NOG NIET OPGESLAGEN</span></div>
@@ -72,7 +73,7 @@ textarea{width:800px; height:150px; background:#1e1e1e; color:#00ff00; border:1p
 
     <div id="customModal">
         <div class="modal-content">
-            <div id="modalText" class="modal-text">Weet je het zeker?</div>
+            <div id="modalText" class="modal-text"></div>
             <div class="modal-btns">
                 <button id="modalConfirm" style="background:#00bfff;">Ja</button>
                 <button onclick="closeModal()" class="btn-alt">Annuleer</button>
@@ -83,8 +84,9 @@ textarea{width:800px; height:150px; background:#1e1e1e; color:#00ff00; border:1p
 <script>
 const canvas=document.getElementById("envelopeCanvas"), ctx=canvas.getContext("2d"), editor=document.getElementById("jsonEditor");
 let keyframes=[{time:0,value:0},{time:8000,value:0}], selected=null, playStart=Date.now();
-let isDraggingPlayhead = false, manualTime = 0, isUnsaved = false, lastFetchTime = 0;
-const UPDATE_INTERVAL = 60; 
+let isDraggingPlayhead = false, manualTime = 0, isUnsaved = false;
+let lastFetchTime = 0, isFetching = false;
+const FETCH_THROTTLE = 100;
 
 let modalResolve;
 function openModal(text) {
@@ -92,14 +94,8 @@ function openModal(text) {
     document.getElementById("customModal").style.display = "block";
     return new Promise(resolve => { modalResolve = resolve; });
 }
-function closeModal() {
-    document.getElementById("customModal").style.display = "none";
-    if(modalResolve) modalResolve(false);
-}
-document.getElementById("modalConfirm").onclick = () => {
-    document.getElementById("customModal").style.display = "none";
-    if(modalResolve) modalResolve(true);
-};
+function closeModal() { document.getElementById("customModal").style.display = "none"; if(modalResolve) modalResolve(false); }
+document.getElementById("modalConfirm").onclick = () => { document.getElementById("customModal").style.display = "none"; if(modalResolve) modalResolve(true); };
 
 const toX=(t)=>t*canvas.width/keyframes[keyframes.length-1].time;
 const toY=(v)=>canvas.height/2 - v*(canvas.height/2.2)/100;
@@ -149,8 +145,7 @@ window.onmouseup=()=>{
 function updateManualPos(x) {
     let now = Date.now();
     manualTime = Math.max(0, Math.min(keyframes[keyframes.length-1].time, fromX(x)));
-    if (now - lastFetchTime > UPDATE_INTERVAL) {
-        lastFetchTime = now;
+    if (!isFetching && (now - lastFetchTime > FETCH_THROTTLE)) {
         let val = 0;
         for (let i = 0; i < keyframes.length - 1; i++) {
             if (manualTime >= keyframes[i].time && manualTime <= keyframes[i+1].time) {
@@ -159,50 +154,9 @@ function updateManualPos(x) {
                 break;
             }
         }
-        fetch('/set_manual?v=' + val.toFixed(2));
+        isFetching = true; lastFetchTime = now;
+        fetch('/set_manual?v=' + val.toFixed(2)).finally(() => { isFetching = false; });
     }
-}
-
-function downloadConfig() {
-    let fileName = document.getElementById("filename").value.trim();
-    if (!fileName) {
-        const sel = document.getElementById("presetSelect");
-        if (sel.value && sel.value !== "Geen presets" && sel.value !== "Laden...") fileName = sel.value;
-    }
-    if (!fileName) fileName = "motor_preset";
-    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(keyframes, null, 2));
-    const dl = document.createElement('a');
-    dl.setAttribute("href", dataStr);
-    dl.setAttribute("download", fileName + ".json");
-    dl.click();
-    dl.remove();
-}
-
-async function handleFileUpload(event) {
-    const file = event.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = async (e) => {
-        try {
-            const uploadedData = JSON.parse(e.target.result);
-            let baseName = file.name.replace(".json", "");
-            const existingPresets = await fetch('/list').then(r => r.json());
-            let finalName = baseName;
-            let counter = 1;
-            while (existingPresets.includes(finalName)) {
-                finalName = baseName + "_" + counter;
-                counter++;
-            }
-            await fetch('/save?name=' + finalName, {method: 'POST', body: JSON.stringify(uploadedData)});
-            keyframes = uploadedData;
-            markSaved();
-            sync();
-            updatePresetList(finalName);
-            document.getElementById("filename").value = ""; 
-        } catch(err) { alert("Fout bij uploaden: " + err); }
-    };
-    reader.readAsText(file);
-    event.target.value = "";
 }
 
 function sync(){ 
@@ -215,69 +169,46 @@ function applyJson(){ try { keyframes = JSON.parse(editor.value); markUnsaved();
 
 async function savePreset(){
     const name = document.getElementById("filename").value.trim();
-    if(!name) return alert("Naam verplicht");
+    if(!name) return;
     const list = await fetch('/list').then(r=>r.json());
-    if(list.includes(name)) {
-        const ok = await openModal("Naam '" + name + "' bestaat al. Overschrijven?");
-        if(!ok) return;
-    }
+    if(list.includes(name)) { if(!await openModal("Naam bestaat al. Overschrijven?")) return; }
     fetch('/save?name='+name, {method:'POST', body:JSON.stringify(keyframes)}).then(()=>{
-        document.getElementById("filename").value = ""; updatePresetList(name); markSaved();
+        document.getElementById("filename").value = ""; markSaved(); updatePresetList(name);
     });
 }
 
 async function deletePreset() {
     const name = document.getElementById("presetSelect").value;
-    if(!name || name === "Geen presets" || name === "Laden...") return;
-    const ok = await openModal("Zeker weten dat je '" + name + "' wilt wissen?");
-    if(ok) {
-        fetch('/delete?name=' + name, {method:'DELETE'}).then(() => {
-            updatePresetList().then(() => {
-                autoLoadPreset(true); 
-            });
-        });
+    if(!name || name.includes("...")) return;
+    if(await openModal("Preset '"+name+"' verwijderen?")) {
+        fetch('/delete?name='+name, {method:'DELETE'}).then(() => { updatePresetList().then(() => autoLoadPreset(true)); });
     }
 }
-
-async function confirmAction(type) { if(type === 'delete') await deletePreset(); }
 
 let lastSelectedValue = "";
 async function autoLoadPreset(force = false){
     const sel = document.getElementById("presetSelect");
-    const val = sel.value;
-    if(!val || val === "Geen presets" || val === "Laden...") return;
-
-    if(!force && isUnsaved) {
-        const ok = await openModal("Wijzigingen niet opgeslagen. Doorgaan?");
-        if(!ok) {
-            sel.value = lastSelectedValue; // Reset dropdown naar vorige stand
-            return;
-        }
-    }
-
-    lastSelectedValue = val;
-    fetch('/load?name=' + val).then(r=>r.json()).then(data=>{
+    if(!force && isUnsaved) { if(!await openModal("Wijzigingen niet opgeslagen. Doorgaan?")) { sel.value = lastSelectedValue; return; } }
+    lastSelectedValue = sel.value;
+    fetch('/load?name=' + sel.value).then(r=>r.json()).then(data=>{
         keyframes = data; sync(); playStart = Date.now(); fetch('/reset_clock_to?t=0'); markSaved();
-        document.getElementById("filename").value = ""; // Veld leegmaken na laden
+        document.getElementById("filename").value = ""; 
     });
 }
 
 async function updatePresetList(targetName = null){
     const list = await fetch('/list').then(r=>r.json());
-    if(!targetName) targetName = await fetch('/get_active_name').then(r=>r.text());
     const sel = document.getElementById("presetSelect");
     sel.innerHTML = list.length ? "" : "<option>Geen presets</option>";
     list.forEach(f => {
         let opt = document.createElement("option"); opt.value = f; opt.textContent = f;
-        if(f === targetName) { opt.selected = true; lastSelectedValue = f; }
+        if(f === targetName) opt.selected = true;
         sel.appendChild(opt);
     });
+    if(targetName) lastSelectedValue = targetName;
 }
 
-function updateDuration(){
-    keyframes[keyframes.length-1].time = document.getElementById("totalTime").value * 1000;
-    markUnsaved(); sync();
-}
+function updateDuration(){ keyframes[keyframes.length-1].time = document.getElementById("totalTime").value * 1000; markUnsaved(); sync(); }
 
 canvas.ondblclick=(e)=>{
     const rect=canvas.getBoundingClientRect(), x=e.clientX-rect.left, y=e.clientY-rect.top;
@@ -285,13 +216,50 @@ canvas.ondblclick=(e)=>{
     if(index > 0 && index < keyframes.length - 1){ keyframes.splice(index, 1); markUnsaved(); sync(); }
 };
 
+function downloadConfig() {
+    let name = document.getElementById("presetSelect").value || "preset";
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(keyframes, null, 2));
+    const dl = document.createElement('a'); dl.setAttribute("href", dataStr); dl.setAttribute("download", name+".json"); dl.click();
+}
+
+async function handleFileUpload(event) {
+    const file = event.target.files[0];
+    if(!file) return;
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+        try {
+            const uploadedData = JSON.parse(e.target.result);
+            let baseName = file.name.replace(".json", "");
+            const existingPresets = await fetch('/list').then(r => r.json());
+            
+            // Slimme doortel-logica
+            let finalName = baseName;
+            if (existingPresets.includes(finalName)) {
+                let counter = 1;
+                finalName = baseName + "_" + counter;
+                while (existingPresets.includes(finalName)) {
+                    counter++;
+                    finalName = baseName + "_" + counter;
+                }
+            }
+            
+            await fetch('/save?name=' + finalName, {method: 'POST', body: JSON.stringify(uploadedData)});
+            keyframes = uploadedData; markSaved(); sync();
+            await updatePresetList(finalName); 
+            document.getElementById("filename").value = "";
+        } catch(err) { alert("Fout bij uploaden"); }
+    };
+    reader.readAsText(file);
+    event.target.value = ""; // Reset input zodat je hetzelfde bestand opnieuw kunt kiezen
+}
+
 fetch('/get_active').then(r=>r.json()).then(data=>{ if(data.length > 0) keyframes = data; sync(); updatePresetList(); draw(); });
 </script>
 </body>
 </html>
 )rawliteral";
 
-// --- C++ BACKEND (ongewijzigd) ---
+// --- C++ BACKEND ---
 void loadFromJSON(String json) {
   DynamicJsonDocument doc(4096);
   if (deserializeJson(doc, json)) return;
@@ -311,7 +279,7 @@ void setup() {
   WiFi.mode(WIFI_AP_STA);
   WiFi.softAP(ap_ssid, ap_pass);
   WiFi.begin(ssid_home, pass_home);
-  if (MDNS.begin("motor")) { Serial.println("mDNS gestart"); }
+  if (MDNS.begin(mdns_name)) { Serial.println("mDNS gestart"); }
   server.on("/", []() { server.send(200, "text/html", htmlPage); });
   server.on("/reset_clock_to", [](){
     if(server.hasArg("t")) { startTime = millis() - server.arg("t").toInt(); manualOverride = false; }
@@ -391,5 +359,5 @@ void loop() {
       stepIndex = (currentVal > 0) ? (stepIndex + 1) % 8 : (stepIndex + 7) % 8;
       for (int i = 0; i < 4; i++) digitalWrite(motorPins[i], steps[stepIndex][i]);
     }
-  } else { for (int i = 0; i < 4; i++) digitalWrite(motorPins[i], LOW); }
+  } else { for (int i = 0; i < 4; i++) digitalWrite(motorPins[i], LOW); delayMicroseconds(100); }
 }
