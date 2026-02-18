@@ -34,19 +34,20 @@ const char* htmlPage PROGMEM = R"rawliteral(
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Stepper Pro v16.5</title>
+<title>Stepper Pro v16.8</title>
 <style>
 body{background:#121212;color:#eee;font-family:sans-serif;text-align:center;margin:0;padding:20px;}
 canvas{background:#1e1e1e;border:2px solid #444;cursor:pointer;touch-action:none;display:block;margin:5px auto;border-radius:8px;}
-.controls{background:#2a2a2a;padding:15px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;gap:10px;margin:0 auto 10px auto;border:1px solid #444;flex-wrap:wrap;max-width:850px;box-sizing:border-box;}
+.controls{background:#2a2a2a;padding:15px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;gap:10px;margin:0 auto 10px auto;border:1px solid #444;flex-wrap:wrap;max-width:900px;box-sizing:border-box;}
 input,button,select{height:42px; padding:0 10px; border-radius:4px;border:none;background:#444;color:white;outline:none;font-size:14px;}
 button{background:#00bfff;cursor:pointer;font-weight:bold;transition:0.2s;}
 button:hover{background:#009cd1;}
 .btn-delete{background:#ff4444 !important;}
 .btn-alt{background:#666 !important;}
-.btn-new{background:#28a745 !important;} /* Groene kleur voor Nieuw */
-.unsaved-container{height: 20px;}
-.unsaved-text{color:#ff9900; font-weight:bold; font-size: 11px; display:none;}
+.btn-new{background:#28a745 !important;}
+.unsaved-container{height: 25px; margin-bottom:5px;}
+.unsaved-text{color:#ff9900; font-weight:bold; font-size: 13px; display:none;}
+#currentFileDisplay{color:#00ff00; font-weight:bold; margin-left:10px;}
 textarea{width:800px; height:100px; background:#1e1e1e; color:#00ff00; border:1px solid #444; font-family:monospace; margin-top:10px;}
 #customModal{display:none; position:fixed; z-index:1000; left:0; top:0; width:100%; height:100%; background:rgba(0,0,0,0.8); backdrop-filter:blur(4px);}
 .modal-content{background:#2a2a2a; margin:15% auto; padding:25px; border:1px solid #00bfff; width:320px; border-radius:12px;}
@@ -54,23 +55,25 @@ textarea{width:800px; height:100px; background:#1e1e1e; color:#00ff00; border:1p
 </style>
 </head>
 <body>
-    <h2 id="pageTitle">Motor Control</h2>
+    <h2>Motor Control Pro <span id="currentFileDisplay"></span></h2>
     <div class="controls">
         <button onclick="createNew()" class="btn-new">➕ Nieuw</button>
         <span style="border-left:1px solid #444;height:30px;margin:0 5px;"></span>
         <select id="presetSelect" onchange="autoLoadPreset()"><option>Laden...</option></select>
         <button onclick="deletePreset()" class="btn-delete">🗑️</button>
         <span style="border-left:1px solid #444;height:30px;margin:0 5px;"></span>
-        <input type="text" id="filename" placeholder="Naam..." style="width:100px;">
-        <label>Duur:</label>
-        <input type="number" id="totalTime" value="8" min="1" style="width:50px;" onchange="updateDuration()">
-        <button onclick="savePreset()">Opslaan</button>
+        <button onclick="saveCurrent()">Opslaan</button>
+        <button onclick="saveAs()" class="btn-alt">Opslaan als...</button>
         <span style="border-left:1px solid #444;height:30px;margin:0 5px;"></span>
+        <label>Duur (s):</label>
+        <input type="number" id="totalTime" value="8" min="1" style="width:50px;" onchange="updateDuration()">
         <button onclick="downloadConfig()" class="btn-alt">💾</button>
         <button onclick="document.getElementById('fileInput').click()" class="btn-alt">📂</button>
         <input type="file" id="fileInput" style="display:none" onchange="handleFileUpload(event)" accept=".json">
     </div>
-    <div class="unsaved-container"><span id="unsavedWarning" class="unsaved-text">WIJZIGINGEN NOG NIET OPGESLAGEN</span></div>
+    <div class="unsaved-container">
+        <span id="unsavedWarning" class="unsaved-text">⚠️ WIJZIGINGEN NOG NIET OPGESLAGEN</span>
+    </div>
     <canvas id="envelopeCanvas" width="800" height="400"></canvas>
     <textarea id="jsonEditor" spellcheck="false" oninput="applyJson()"></textarea>
 
@@ -88,6 +91,7 @@ textarea{width:800px; height:100px; background:#1e1e1e; color:#00ff00; border:1p
 const canvas=document.getElementById("envelopeCanvas"), ctx=canvas.getContext("2d"), editor=document.getElementById("jsonEditor");
 let keyframes=[{time:0,value:0},{time:8000,value:0}], selected=null, playStart=Date.now();
 let isDraggingPlayhead = false, manualTime = 0, isUnsaved = false;
+let currentOpenFile = ""; 
 let lastFetchTime = 0, isFetching = false;
 const FETCH_THROTTLE = 100;
 
@@ -106,7 +110,14 @@ const fromX=(x)=>x*keyframes[keyframes.length-1].time/canvas.width;
 const fromY=(y)=>(canvas.height/2 - y)*100/(canvas.height/2.2);
 
 function markUnsaved() { isUnsaved = true; document.getElementById("unsavedWarning").style.display = "inline-block"; }
-function markSaved() { isUnsaved = false; document.getElementById("unsavedWarning").style.display = "none"; }
+function markSaved(name) { 
+    isUnsaved = false; 
+    document.getElementById("unsavedWarning").style.display = "none"; 
+    if(name) {
+        currentOpenFile = name;
+        document.getElementById("currentFileDisplay").innerText = " - " + name;
+    }
+}
 
 function sync(){ 
     editor.value = JSON.stringify(keyframes, null, 2);
@@ -114,18 +125,41 @@ function sync(){
     return fetch('/set_live',{method:'POST',body:JSON.stringify(keyframes)}); 
 }
 
-// Nieuwe functie voor schone lei
 async function createNew() {
-    if(isUnsaved) {
-        if(!await openModal("Huidige wijzigingen gaan verloren. Doorgaan?")) return;
-    }
+    if(isUnsaved && !await openModal("Huidige wijzigingen gaan verloren. Doorgaan?")) return;
     keyframes = [{time:0,value:0},{time:8000,value:0}];
-    document.getElementById("filename").value = "";
-    document.getElementById("presetSelect").selectedIndex = -1; // Deselecteer huidige preset
+    currentOpenFile = "";
+    document.getElementById("currentFileDisplay").innerText = "";
+    document.getElementById("presetSelect").selectedIndex = -1;
     markUnsaved();
-    sync();
+    await sync();
     playStart = Date.now();
     fetch('/reset_clock_to?t=0');
+}
+
+async function saveCurrent() {
+    if(!currentOpenFile) {
+        saveAs();
+        return;
+    }
+    if(await openModal("Huidige configuratie '" + currentOpenFile + "' overschrijven?")) {
+        performSave(currentOpenFile);
+    }
+}
+
+async function saveAs() {
+    let name = prompt("Voer een naam in voor deze configuratie:", currentOpenFile);
+    if (!name) return;
+    name = name.trim().replace(/[^a-z0-9_-]/gi, '_');
+    const list = await fetch('/list').then(r=>r.json());
+    if(list.includes(name) && !await openModal("Naam '" + name + "' bestaat al. Overschrijven?")) return;
+    performSave(name);
+}
+
+function performSave(name) {
+    fetch('/save?name='+name, {method:'POST', body:JSON.stringify(keyframes)}).then(()=>{
+        markSaved(name); updatePresetList(name);
+    });
 }
 
 function draw(){
@@ -184,34 +218,29 @@ function updateManualPos(x) {
 
 function applyJson(){ try { keyframes = JSON.parse(editor.value); markUnsaved(); sync(); } catch(e){} }
 
-async function savePreset(){
-    const name = document.getElementById("filename").value.trim();
-    if(!name) return;
-    const list = await fetch('/list').then(r=>r.json());
-    if(list.includes(name)) { if(!await openModal("Naam bestaat al. Overschrijven?")) return; }
-    fetch('/save?name='+name, {method:'POST', body:JSON.stringify(keyframes)}).then(()=>{
-        document.getElementById("filename").value = ""; markSaved(); updatePresetList(name);
-    });
-}
-
 async function deletePreset() {
     const name = document.getElementById("presetSelect").value;
     if(!name || name.includes("...")) return;
-    if(await openModal("Preset '"+name+"' verwijderen?")) {
-        fetch('/delete?name='+name, {method:'DELETE'}).then(() => { updatePresetList().then(() => autoLoadPreset(true)); });
+    if(await openModal("Preset '"+name+"' definitief verwijderen van de ESP?")) {
+        fetch('/delete?name='+name, {method:'DELETE'}).then(() => { 
+            if(currentOpenFile === name) {
+                currentOpenFile = "";
+                document.getElementById("currentFileDisplay").innerText = "";
+            }
+            updatePresetList().then(() => autoLoadPreset(true)); 
+        });
     }
 }
 
 let lastSelectedValue = "";
 async function autoLoadPreset(force = false){
     const sel = document.getElementById("presetSelect");
-    if(!force && isUnsaved) { if(!await openModal("Wijzigingen niet opgeslagen. Doorgaan?")) { sel.value = lastSelectedValue; return; } }
+    if(!force && isUnsaved && !await openModal("Wijzigingen niet opgeslagen. Doorgaan?")) { sel.value = lastSelectedValue; return; }
     lastSelectedValue = sel.value;
     fetch('/load?name=' + sel.value).then(r=>r.json()).then(data=>{
         keyframes = data; 
         sync().then(() => { 
-            playStart = Date.now(); fetch('/reset_clock_to?t=0'); markSaved();
-            document.getElementById("filename").value = ""; 
+            playStart = Date.now(); fetch('/reset_clock_to?t=0'); markSaved(sel.value);
         });
     });
 }
@@ -237,7 +266,7 @@ canvas.ondblclick=(e)=>{
 };
 
 function downloadConfig() {
-    let name = document.getElementById("presetSelect").value || "preset";
+    let name = currentOpenFile || "configuratie";
     const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(keyframes, null, 2));
     const dl = document.createElement('a'); dl.setAttribute("href", dataStr); dl.setAttribute("download", name+".json"); dl.click();
 }
@@ -250,29 +279,27 @@ async function handleFileUpload(event) {
         try {
             const uploadedData = JSON.parse(e.target.result);
             let baseName = file.name.replace(".json", "");
-            const existingPresets = await fetch('/list').then(r => r.json());
-            let finalName = baseName;
-            if (existingPresets.includes(finalName)) {
-                let counter = 1;
-                finalName = baseName + "_" + counter;
-                while (existingPresets.includes(finalName)) { counter++; finalName = baseName + "_" + counter; }
-            }
-            await fetch('/save?name=' + finalName, {method: 'POST', body: JSON.stringify(uploadedData)});
+            await fetch('/save?name=' + baseName, {method: 'POST', body: JSON.stringify(uploadedData)});
             keyframes = uploadedData; 
-            sync().then(() => { markSaved(); updatePresetList(finalName); document.getElementById("filename").value = ""; });
+            sync().then(() => { markSaved(baseName); updatePresetList(baseName); });
         } catch(err) { alert("Fout bij uploaden"); }
     };
     reader.readAsText(file);
     event.target.value = "";
 }
 
+// Initiele start
+fetch('/get_active_name').then(r=>r.text()).then(name => {
+    if(name && name !== "Geen") currentOpenFile = name;
+    document.getElementById("currentFileDisplay").innerText = currentOpenFile ? " - " + currentOpenFile : "";
+});
 fetch('/get_active').then(r=>r.json()).then(data=>{ if(data.length > 0) keyframes = data; sync(); updatePresetList(); draw(); });
 </script>
 </body>
 </html>
 )rawliteral";
 
-// --- C++ BACKEND (ongewijzigd) ---
+// --- C++ BACKEND ---
 void loadFromJSON(String json) {
   DynamicJsonDocument doc(4096);
   if (deserializeJson(doc, json)) return;
@@ -289,32 +316,41 @@ void setup() {
   for (int i = 0; i < 4; i++) pinMode(motorPins[i], OUTPUT);
   LittleFS.begin(true);
   if (LittleFS.exists("/active.json")) loadFromJSON(LittleFS.open("/active.json", "r").readString());
+  
   WiFi.mode(WIFI_AP_STA);
   WiFi.softAP(ap_ssid, ap_pass);
   WiFi.begin(ssid_home, pass_home);
   if (MDNS.begin(mdns_name)) { Serial.println("mDNS gestart"); }
+  
   server.on("/", []() { server.send(200, "text/html", htmlPage); });
+  
   server.on("/reset_clock_to", [](){
     if(server.hasArg("t")) { startTime = millis() - server.arg("t").toInt(); manualOverride = false; }
     server.send(200);
   });
+  
   server.on("/set_manual", [](){
     if(server.hasArg("v")) { manualValue = server.arg("v").toFloat(); manualOverride = true; }
     server.send(200);
   });
+  
   server.on("/set_live", HTTP_POST, [](){ if(server.hasArg("plain")) loadFromJSON(server.arg("plain")); server.send(200); });
+  
   server.on("/save", HTTP_POST, [](){
     String name = server.arg("name"); String data = server.arg("plain");
     File f1 = LittleFS.open("/" + name + ".json", "w"); f1.print(data); f1.close();
     File f2 = LittleFS.open("/active.json", "w"); f2.print(data); f2.close();
     File f3 = LittleFS.open("/active_name.txt", "w"); f3.print(name); f3.close();
-    startTime = millis(); server.send(200);
+    startTime = millis(); 
+    server.send(200);
   });
+  
   server.on("/delete", HTTP_DELETE, [](){
     String name = server.arg("name");
     if(LittleFS.exists("/" + name + ".json")) { LittleFS.remove("/" + name + ".json"); server.send(200); } 
     else server.send(404);
   });
+  
   server.on("/load", HTTP_GET, [](){
     String name = server.arg("name");
     File file = LittleFS.open("/" + name + ".json", "r");
@@ -326,6 +362,7 @@ void setup() {
       startTime = millis(); server.send(200, "application/json", content);
     } else server.send(404);
   });
+  
   server.on("/list", HTTP_GET, [](){
     String list = "["; File root = LittleFS.open("/"); File file = root.openNextFile();
     while (file) {
@@ -335,16 +372,19 @@ void setup() {
     }
     list += "]"; server.send(200, "application/json", list);
   });
+  
   server.on("/get_active", HTTP_GET, [](){
     File f = LittleFS.open("/active.json", "r");
     if(f) { server.send(200, "application/json", f.readString()); f.close(); }
     else server.send(200, "application/json", "[]");
   });
+
   server.on("/get_active_name", HTTP_GET, [](){
     if (LittleFS.exists("/active_name.txt")) {
       File f = LittleFS.open("/active_name.txt", "r"); String n = f.readString(); f.close(); server.send(200, "text/plain", n);
     } else server.send(200, "text/plain", "Geen");
   });
+  
   server.begin();
   startTime = millis();
 }
