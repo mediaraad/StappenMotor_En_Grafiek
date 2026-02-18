@@ -7,9 +7,10 @@
 
 const char* ssid_home = WIFI_TP_SSID;
 const char* pass_home = WIFI_TP_PASSWORD;
-const char* ap_ssid   = "Motor-Control-Pro";
-const char* ap_pass   = "12345678"; 
-const char* mdns_name = "motor";
+const char* ap_ssid   = SSID;
+const char* ap_pass   = LOCAL_WIFI_PASS; 
+const char* mdns_name = MDNS_NAME;  // .local will be added
+
 
 WebServer server(80);
 
