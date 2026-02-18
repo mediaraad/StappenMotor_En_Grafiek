@@ -34,7 +34,7 @@ const char* htmlPage PROGMEM = R"rawliteral(
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Stepper Pro v16.8</title>
+<title>Stepper Pro v17.5</title>
 <style>
 body{background:#121212;color:#eee;font-family:sans-serif;text-align:center;margin:0;padding:20px;}
 canvas{background:#1e1e1e;border:2px solid #444;cursor:pointer;touch-action:none;display:block;margin:5px auto;border-radius:8px;}
@@ -126,39 +126,82 @@ function sync(){
 }
 
 async function createNew() {
-    if(isUnsaved && !await openModal("Huidige wijzigingen gaan verloren. Doorgaan?")) return;
     keyframes = [{time:0,value:0},{time:8000,value:0}];
     currentOpenFile = "";
     document.getElementById("currentFileDisplay").innerText = "";
     document.getElementById("presetSelect").selectedIndex = -1;
-    markUnsaved();
+    markSaved(""); // Reset unsaved status bij nieuw
     await sync();
     playStart = Date.now();
     fetch('/reset_clock_to?t=0');
 }
 
-async function saveCurrent() {
-    if(!currentOpenFile) {
-        saveAs();
+async function autoLoadPreset(nameOverride = null){
+    const sel = document.getElementById("presetSelect");
+    const name = nameOverride || sel.value;
+    if(!name || name.includes("...")) return;
+    
+    // Alleen waarschuwen als we handmatig een nieuwe kiezen in de pulldown
+    if(!nameOverride && isUnsaved && !await openModal("Wijzigingen niet opgeslagen. Doorgaan?")) {
+        sel.value = currentOpenFile;
         return;
     }
-    if(await openModal("Huidige configuratie '" + currentOpenFile + "' overschrijven?")) {
+
+    const response = await fetch('/load?name=' + name);
+    keyframes = await response.json();
+    markSaved(name);
+    sync();
+    playStart = Date.now();
+    fetch('/reset_clock_to?t=0');
+}
+
+async function deletePreset() {
+    const name = document.getElementById("presetSelect").value;
+    if(!name || name.includes("...")) return;
+
+    if(await openModal("Weet je zeker dat je '" + name + "' wilt verwijderen?")) {
+        await fetch('/delete?name=' + name, {method: 'DELETE'});
+        
+        // Haal de nieuwe lijst op
+        const list = await fetch('/list').then(r => r.json());
+        await updatePresetList();
+
+        if (list.length > 0) {
+            // Laad het eerste bestand uit de nieuwe lijst
+            autoLoadPreset(list[0]);
+        } else {
+            // Geen bestanden meer over? Maak een nieuwe schone lei
+            createNew();
+        }
+    }
+}
+
+async function fileExists(name) {
+    const list = await fetch('/list').then(r=>r.json());
+    return list.includes(name);
+}
+
+async function saveCurrent() {
+    if(!currentOpenFile) { saveAs(); return; }
+    if(await openModal("Weet je zeker dat je '" + currentOpenFile + "' wilt overschrijven?")) {
         performSave(currentOpenFile);
     }
 }
 
 async function saveAs() {
-    let name = prompt("Voer een naam in voor deze configuratie:", currentOpenFile);
+    let name = prompt("Voer een nieuwe naam in:", currentOpenFile || "config");
     if (!name) return;
     name = name.trim().replace(/[^a-z0-9_-]/gi, '_');
-    const list = await fetch('/list').then(r=>r.json());
-    if(list.includes(name) && !await openModal("Naam '" + name + "' bestaat al. Overschrijven?")) return;
+    if(await fileExists(name)) {
+        if(!await openModal("Bestand '" + name + "' bestaat al. Overschrijven?")) return;
+    }
     performSave(name);
 }
 
 function performSave(name) {
     fetch('/save?name='+name, {method:'POST', body:JSON.stringify(keyframes)}).then(()=>{
-        markSaved(name); updatePresetList(name);
+        markSaved(name); 
+        updatePresetList(name);
     });
 }
 
@@ -218,43 +261,15 @@ function updateManualPos(x) {
 
 function applyJson(){ try { keyframes = JSON.parse(editor.value); markUnsaved(); sync(); } catch(e){} }
 
-async function deletePreset() {
-    const name = document.getElementById("presetSelect").value;
-    if(!name || name.includes("...")) return;
-    if(await openModal("Preset '"+name+"' definitief verwijderen van de ESP?")) {
-        fetch('/delete?name='+name, {method:'DELETE'}).then(() => { 
-            if(currentOpenFile === name) {
-                currentOpenFile = "";
-                document.getElementById("currentFileDisplay").innerText = "";
-            }
-            updatePresetList().then(() => autoLoadPreset(true)); 
-        });
-    }
-}
-
-let lastSelectedValue = "";
-async function autoLoadPreset(force = false){
-    const sel = document.getElementById("presetSelect");
-    if(!force && isUnsaved && !await openModal("Wijzigingen niet opgeslagen. Doorgaan?")) { sel.value = lastSelectedValue; return; }
-    lastSelectedValue = sel.value;
-    fetch('/load?name=' + sel.value).then(r=>r.json()).then(data=>{
-        keyframes = data; 
-        sync().then(() => { 
-            playStart = Date.now(); fetch('/reset_clock_to?t=0'); markSaved(sel.value);
-        });
-    });
-}
-
 async function updatePresetList(targetName = null){
     const list = await fetch('/list').then(r=>r.json());
     const sel = document.getElementById("presetSelect");
     sel.innerHTML = list.length ? "" : "<option>Geen presets</option>";
     list.forEach(f => {
         let opt = document.createElement("option"); opt.value = f; opt.textContent = f;
-        if(f === targetName) opt.selected = true;
+        if(f === (targetName || currentOpenFile)) opt.selected = true;
         sel.appendChild(opt);
     });
-    if(targetName) lastSelectedValue = targetName;
 }
 
 function updateDuration(){ keyframes[keyframes.length-1].time = document.getElementById("totalTime").value * 1000; markUnsaved(); sync(); }
@@ -288,18 +303,26 @@ async function handleFileUpload(event) {
     event.target.value = "";
 }
 
-// Initiele start
-fetch('/get_active_name').then(r=>r.text()).then(name => {
-    if(name && name !== "Geen") currentOpenFile = name;
-    document.getElementById("currentFileDisplay").innerText = currentOpenFile ? " - " + currentOpenFile : "";
-});
-fetch('/get_active').then(r=>r.json()).then(data=>{ if(data.length > 0) keyframes = data; sync(); updatePresetList(); draw(); });
+async function init() {
+    const nameRes = await fetch('/get_active_name');
+    const name = await nameRes.text();
+    if(name && name !== "Geen") {
+        currentOpenFile = name;
+        document.getElementById("currentFileDisplay").innerText = " - " + name;
+    }
+    const dataRes = await fetch('/get_active');
+    const data = await dataRes.json();
+    if(data.length > 0) keyframes = data;
+    await updatePresetList();
+    sync(); draw();
+}
+init();
 </script>
 </body>
 </html>
 )rawliteral";
 
-// --- C++ BACKEND ---
+// --- C++ BACKEND --- (Gelijk aan v17.4)
 void loadFromJSON(String json) {
   DynamicJsonDocument doc(4096);
   if (deserializeJson(doc, json)) return;
@@ -316,41 +339,24 @@ void setup() {
   for (int i = 0; i < 4; i++) pinMode(motorPins[i], OUTPUT);
   LittleFS.begin(true);
   if (LittleFS.exists("/active.json")) loadFromJSON(LittleFS.open("/active.json", "r").readString());
-  
-  WiFi.mode(WIFI_AP_STA);
-  WiFi.softAP(ap_ssid, ap_pass);
-  WiFi.begin(ssid_home, pass_home);
+  WiFi.mode(WIFI_AP_STA); WiFi.softAP(ap_ssid, ap_pass); WiFi.begin(ssid_home, pass_home);
   if (MDNS.begin(mdns_name)) { Serial.println("mDNS gestart"); }
-  
   server.on("/", []() { server.send(200, "text/html", htmlPage); });
-  
-  server.on("/reset_clock_to", [](){
-    if(server.hasArg("t")) { startTime = millis() - server.arg("t").toInt(); manualOverride = false; }
-    server.send(200);
-  });
-  
-  server.on("/set_manual", [](){
-    if(server.hasArg("v")) { manualValue = server.arg("v").toFloat(); manualOverride = true; }
-    server.send(200);
-  });
-  
+  server.on("/reset_clock_to", [](){ if(server.hasArg("t")) { startTime = millis() - server.arg("t").toInt(); manualOverride = false; } server.send(200); });
+  server.on("/set_manual", [](){ if(server.hasArg("v")) { manualValue = server.arg("v").toFloat(); manualOverride = true; } server.send(200); });
   server.on("/set_live", HTTP_POST, [](){ if(server.hasArg("plain")) loadFromJSON(server.arg("plain")); server.send(200); });
-  
   server.on("/save", HTTP_POST, [](){
     String name = server.arg("name"); String data = server.arg("plain");
     File f1 = LittleFS.open("/" + name + ".json", "w"); f1.print(data); f1.close();
     File f2 = LittleFS.open("/active.json", "w"); f2.print(data); f2.close();
     File f3 = LittleFS.open("/active_name.txt", "w"); f3.print(name); f3.close();
-    startTime = millis(); 
-    server.send(200);
+    startTime = millis(); server.send(200);
   });
-  
   server.on("/delete", HTTP_DELETE, [](){
     String name = server.arg("name");
     if(LittleFS.exists("/" + name + ".json")) { LittleFS.remove("/" + name + ".json"); server.send(200); } 
     else server.send(404);
   });
-  
   server.on("/load", HTTP_GET, [](){
     String name = server.arg("name");
     File file = LittleFS.open("/" + name + ".json", "r");
@@ -362,7 +368,6 @@ void setup() {
       startTime = millis(); server.send(200, "application/json", content);
     } else server.send(404);
   });
-  
   server.on("/list", HTTP_GET, [](){
     String list = "["; File root = LittleFS.open("/"); File file = root.openNextFile();
     while (file) {
@@ -372,19 +377,14 @@ void setup() {
     }
     list += "]"; server.send(200, "application/json", list);
   });
-  
   server.on("/get_active", HTTP_GET, [](){
-    File f = LittleFS.open("/active.json", "r");
-    if(f) { server.send(200, "application/json", f.readString()); f.close(); }
+    File f = LittleFS.open("/active.json", "r"); if(f) { server.send(200, "application/json", f.readString()); f.close(); }
     else server.send(200, "application/json", "[]");
   });
-
   server.on("/get_active_name", HTTP_GET, [](){
-    if (LittleFS.exists("/active_name.txt")) {
-      File f = LittleFS.open("/active_name.txt", "r"); String n = f.readString(); f.close(); server.send(200, "text/plain", n);
-    } else server.send(200, "text/plain", "Geen");
+    if (LittleFS.exists("/active_name.txt")) { File f = LittleFS.open("/active_name.txt", "r"); String n = f.readString(); f.close(); server.send(200, "text/plain", n); }
+    else server.send(200, "text/plain", "Geen");
   });
-  
   server.begin();
   startTime = millis();
 }
@@ -392,9 +392,7 @@ void setup() {
 void loop() {
   server.handleClient();
   float currentVal = 0;
-  if (manualOverride) {
-    currentVal = manualValue;
-  } else {
+  if (manualOverride) { currentVal = manualValue; } else {
     unsigned long t = (millis() - startTime) % loopDuration;
     for (int i = 0; i < envelopeSize - 1; i++) {
       if (t >= envelope[i].time && t <= envelope[i + 1].time) {
@@ -412,5 +410,5 @@ void loop() {
       stepIndex = (currentVal > 0) ? (stepIndex + 1) % 8 : (stepIndex + 7) % 8;
       for (int i = 0; i < 4; i++) digitalWrite(motorPins[i], steps[stepIndex][i]);
     }
-  } else { for (int i = 0; i < 4; i++) digitalWrite(motorPins[i], LOW); delayMicroseconds(100); }
+  } else { for (int i = 0; i < 4; i++) digitalWrite(motorPins[i], LOW); }
 }
