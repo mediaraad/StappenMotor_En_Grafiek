@@ -31,7 +31,7 @@ const char* htmlPage PROGMEM = R"rawliteral(
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Stepper Pro v20.3 - Layout Fix</title>
+<title>Stepper Pro v20.4 - DoubleClick Fix</title>
 <style>
 body{background:#121212;color:#eee;font-family:sans-serif;text-align:center;margin:0;padding:20px;}
 canvas{background:#1e1e1e;border:2px solid #444;cursor:pointer;touch-action:none;display:block;margin:5px auto;border-radius:8px;box-shadow: 0 4px 15px rgba(0,0,0,0.5);}
@@ -212,6 +212,12 @@ canvas.onmousedown=(e)=>{
     if(Math.abs(x - toX((Date.now()-playStart)%dur)) < 30) { isDraggingPlayhead = true; manualTime = (Date.now()-playStart)%dur; return; }
     selected=keyframes.find(p=>Math.hypot(toX(p.time)-x,toY(p.value)-y)<15);
     if(!selected){ keyframes.push({time:fromX(x),value:fromY(y)}); keyframes.sort((a,b)=>a.time-b.time); markUnsaved(); sync(); }
+};
+
+canvas.ondblclick=(e)=>{
+    const rect=canvas.getBoundingClientRect(), x=e.clientX-rect.left, y=e.clientY-rect.top;
+    const pIdx=keyframes.findIndex(p=>Math.hypot(toX(p.time)-x,toY(p.value)-y)<15);
+    if(pIdx>0 && pIdx<keyframes.length-1){ keyframes.splice(pIdx,1); markUnsaved(); sync(); }
 };
 
 window.onmousemove=(e)=>{
