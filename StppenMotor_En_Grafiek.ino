@@ -25,30 +25,39 @@ Keyframe envelope[50];
 int envelopeSize = 2;
 unsigned long startTime = 0;
 unsigned long loopDuration = 8000;
+int currentSegment = 0; 
 
 const char* htmlPage PROGMEM = R"rawliteral(
 <!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Stepper Pro v18.9.1 - Refresh Fix</title>
+<title>Stepper Pro v18.9.3 - Sync Fix</title>
 <style>
 body{background:#121212;color:#eee;font-family:sans-serif;text-align:center;margin:0;padding:20px;}
-canvas{background:#1e1e1e;border:2px solid #444;cursor:pointer;touch-action:none;display:block;margin:5px auto;border-radius:8px;}
-.controls{background:#2a2a2a;padding:15px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;gap:10px;margin:0 auto 10px auto;border:1px solid #444;flex-wrap:wrap;max-width:900px;box-sizing:border-box;}
-input,button,select{height:42px; padding:0 10px; border-radius:4px;border:none;background:#444;color:white;outline:none;font-size:14px;}
-button{background:#00bfff;cursor:pointer;font-weight:bold;transition:0.2s;}
-button:hover{background:#009cd1;}
+canvas{background:#1e1e1e;border:2px solid #444;cursor:pointer;touch-action:none;display:block;margin:5px auto;border-radius:8px;box-shadow: 0 4px 15px rgba(0,0,0,0.5);}
+.controls{background:#2a2a2a;padding:15px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;gap:10px;margin:0 auto 10px auto;border:1px solid #444;flex-wrap:wrap;max-width:900px;box-sizing:border-box;box-shadow: 0 2px 10px rgba(0,0,0,0.3);}
+input,button,select{height:42px; padding:0 10px; border-radius:4px;border:none;background:#444;color:white;outline:none;font-size:14px;transition:0.2s;}
+button{background:#00bfff;cursor:pointer;font-weight:bold;}
+button:hover{background:#009cd1;transform:translateY(-1px);}
+button:active{transform:translateY(0px);}
 .btn-delete{background:#ff4444 !important;}
-.btn-alt{background:#666 !important;}
+.btn-delete:hover{background:#cc0000 !important;}
+.btn-alt{background:#555 !important;}
+.btn-alt:hover{background:#666 !important;}
 .btn-new{background:#28a745 !important;}
+.btn-new:hover{background:#218838 !important;}
 .unsaved-container{height: 25px; margin-bottom:5px;}
-.unsaved-text{color:#ff9900; font-weight:bold; font-size: 13px; display:none;}
-#currentFileDisplay{color:#00ff00; font-weight:bold; margin-left:10px;}
-textarea{width:800px; height:150px; background:#1e1e1e; color:#00ff00; border:1px solid #444; font-family:monospace; margin-top:10px; padding:10px; tab-size: 2;}
-#customModal{display:none; position:fixed; z-index:1000; left:0; top:0; width:100%; height:100%; background:rgba(0,0,0,0.8); backdrop-filter:blur(4px);}
-.modal-content{background:#2a2a2a; margin:15% auto; padding:25px; border:1px solid #00bfff; width:320px; border-radius:12px;}
-.modal-btns{display:flex; justify-content:center; gap:15px; margin-top:20px;}
+.unsaved-text{color:#ff9900; font-weight:bold; font-size: 13px; display:none; text-shadow: 0 0 10px rgba(255,153,0,0.3);}
+#currentFileDisplay{color:#00ff00; font-weight:bold; margin-left:10px; text-shadow: 0 0 8px rgba(0,255,0,0.3);}
+textarea{width:800px; height:150px; background:#1e1e1e; color:#00ff00; border:1px solid #444; font-family:monospace; margin-top:10px; padding:10px; tab-size: 2; border-radius:8px;}
+
+#customModal{display:none; position:fixed; z-index:1000; left:0; top:0; width:100%; height:100%; background:rgba(0,0,0,0.85); backdrop-filter:blur(5px); transition: 0.3s;}
+.modal-content{background:#2a2a2a; margin:15% auto; padding:30px; border:1px solid #00bfff; width:350px; border-radius:16px; box-shadow: 0 0 30px rgba(0,191,255,0.2); animation: modalIn 0.3s ease-out;}
+@keyframes modalIn { from {transform: scale(0.8); opacity: 0;} to {transform: scale(1); opacity: 1;} }
+#modalText{font-size: 18px; margin-bottom: 25px; line-height: 1.4;}
+.modal-btns{display:flex; justify-content:center; gap:15px;}
+.modal-btns button { padding: 0 25px; min-width: 100px; height: 45px; border-radius: 8px; }
 </style>
 </head>
 <body>
@@ -76,10 +85,13 @@ textarea{width:800px; height:150px; background:#1e1e1e; color:#00ff00; border:1p
     <textarea id="jsonEditor" spellcheck="false" oninput="applyJson()"></textarea>
 
     <div id="customModal">
-        <div class="modal-content"><div id="modalText"></div><div class="modal-btns">
-            <button id="modalConfirm" style="background:#00bfff;">Ja</button>
-            <button onclick="closeModal()" class="btn-alt">Annuleer</button>
-        </div></div>
+        <div class="modal-content">
+            <div id="modalText"></div>
+            <div class="modal-btns">
+                <button id="modalConfirm">Ja</button>
+                <button onclick="closeModal()" class="btn-alt">Annuleer</button>
+            </div>
+        </div>
     </div>
 
 <script>
@@ -189,7 +201,7 @@ async function deletePreset(){
 
 function createNew(){ keyframes=[{time:0,value:0},{time:8000,value:0}]; markSaved(""); sync(); fetch('/reset_clock_to?t=0'); }
 function performSave(n){ fetch('/save?name='+n,{method:'POST',body:JSON.stringify(keyframes)}).then(()=>{markSaved(n);updatePresetList(n);}); }
-function saveCurrent(){ if(!currentOpenFile)saveAs(); else if(confirm("Overschrijven?")) performSave(currentOpenFile); }
+async function saveCurrent(){ if(!currentOpenFile)saveAs(); else if(await openModal("Bestand '" + currentOpenFile + "' overschrijven?")) performSave(currentOpenFile); }
 function saveAs(){ let n=prompt("Naam:",currentOpenFile||"config"); if(n) performSave(n.trim().replace(/[^a-z0-9_-]/gi,'_')); }
 function downloadConfig(){ const a=document.createElement('a'); a.href="data:text/json;charset=utf-8,"+encodeURIComponent(JSON.stringify(keyframes,null,2)); a.download=(currentOpenFile||"config")+".json"; a.click(); }
 function updateDuration(){ keyframes[keyframes.length-1].time=document.getElementById("totalTime").value*1000; markUnsaved(); sync(); }
@@ -199,12 +211,14 @@ async function init(){
     const res = await fetch('/get_active');
     keyframes = await res.json();
     const n = await fetch('/get_active_name').then(r=>r.text());
-    
-    // Eerst de lijst ophalen, daarna pas markSaved aanroepen zodat de select-box de waarde kan aannemen
     await updatePresetList();
     markSaved(n==="Geen"?"":n);
     
-    sync(); // Vul editor direct bij opstarten
+    // SYNC FIX: Vraag de ESP32 hoe lang de motor al draait
+    const t = await fetch('/get_time').then(r=>r.text());
+    playStart = Date.now() - parseInt(t);
+
+    sync();
     draw();
 }
 init();
@@ -223,6 +237,7 @@ void loadFromJSON(String json) {
     envelope[i].value = (float)doc[i]["value"];
   }
   loopDuration = (envelopeSize > 1) ? envelope[envelopeSize - 1].time : 8000;
+  currentSegment = 0;
 }
 
 void setup() {
@@ -262,21 +277,19 @@ void setup() {
     if (LittleFS.exists("/active_name.txt")) { File f = LittleFS.open("/active_name.txt", "r"); String n = f.readString(); f.close(); server.send(200, "text/plain", n); }
     else server.send(200, "text/plain", "Geen");
   });
-  server.on("/reset_clock_to", [](){ if(server.hasArg("t")) { startTime = millis() - server.arg("t").toInt(); } server.send(200); });
+  server.on("/reset_clock_to", [](){ if(server.hasArg("t")) { startTime = millis() - server.arg("t").toInt(); currentSegment = 0; } server.send(200); });
   server.begin();
 }
 
 void loop() {
   server.handleClient();
   unsigned long t = (millis() - startTime) % loopDuration;
-  float currentVal = 0;
-  for (int i = 0; i < envelopeSize - 1; i++) {
-    if (t >= envelope[i].time && t <= envelope[i + 1].time) {
-      float f = (float)(t - envelope[i].time) / (envelope[i + 1].time - envelope[i].time);
-      currentVal = envelope[i].value + f * (envelope[i + 1].value - envelope[i].value);
-      break;
-    }
+  if (t < envelope[currentSegment].time) currentSegment = 0;
+  while (currentSegment < envelopeSize - 1 && t > envelope[currentSegment + 1].time) {
+    currentSegment++;
   }
+  float f = (float)(t - envelope[currentSegment].time) / (envelope[currentSegment + 1].time - envelope[currentSegment].time);
+  float currentVal = envelope[currentSegment].value + f * (envelope[currentSegment + 1].value - envelope[currentSegment].value);
   float speedFactor = abs(currentVal) / 100.0;
   if (speedFactor > 0.02) {
     unsigned long stepInterval = 1000000.0 / (speedFactor * MAX_STEPS_PER_SEC);
