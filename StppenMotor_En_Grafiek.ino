@@ -31,11 +31,12 @@ const char* htmlPage PROGMEM = R"rawliteral(
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Stepper Pro v20.2 - No Placeholder Fix</title>
+<title>Stepper Pro v20.3 - Layout Fix</title>
 <style>
 body{background:#121212;color:#eee;font-family:sans-serif;text-align:center;margin:0;padding:20px;}
 canvas{background:#1e1e1e;border:2px solid #444;cursor:pointer;touch-action:none;display:block;margin:5px auto;border-radius:8px;box-shadow: 0 4px 15px rgba(0,0,0,0.5);}
-.controls{background:#2a2a2a;padding:15px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;gap:10px;margin:0 auto 10px auto;border:1px solid #444;flex-wrap:wrap;max-width:950px;box-sizing:border-box;box-shadow: 0 2px 10px rgba(0,0,0,0.3);}
+.controls{background:#2a2a2a;padding:15px;border-radius:8px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;margin:0 auto 10px auto;border:1px solid #444;max-width:950px;box-sizing:border-box;box-shadow: 0 2px 10px rgba(0,0,0,0.3);}
+.control-row{display:flex; align-items:center; justify-content:center; gap:10px; flex-wrap:wrap;}
 input,button,select{height:42px; padding:0 10px; border-radius:4px;border:none;background:#444;color:white;outline:none;font-size:14px;transition:0.2s;}
 button{background:#00bfff;cursor:pointer;font-weight:bold;}
 button:hover{background:#009cd1;transform:translateY(-1px);}
@@ -56,23 +57,28 @@ textarea{width:800px; height:120px; background:#1e1e1e; color:#00ff00; border:1p
 <body>
     <h2>Motor Control Pro <span id="currentFileDisplay"></span></h2>
     <div class="controls">
-        <button onclick="createNew()" class="btn-new">➕</button>
-        <select id="presetSelect" onchange="autoLoadPreset()"></select>
-        <button onclick="deletePreset()" class="btn-delete">🗑️</button>
-        <span style="border-left:1px solid #444;height:30px;"></span>
-        <button onclick="saveCurrent()">Opslaan</button>
-        <button onclick="saveAs()" class="btn-alt">Opslaan als...</button>
-        <span style="border-left:1px solid #444;height:30px;"></span>
-        <div class="slider-group">
-            <label style="font-size:12px;">Chaos</label>
-            <input type="range" id="chaosSlider" min="0" max="100" value="0" oninput="updateChaosLabel(); markUnsaved(); sync(true);">
-            <span id="chaosVal" style="font-size:12px;width:30px;">0%</span>
+        <div class="control-row">
+            <button onclick="createNew()" class="btn-new">➕</button>
+            <select id="presetSelect" onchange="autoLoadPreset()"></select>
+            <button onclick="deletePreset()" class="btn-delete">🗑️</button>
+            <span style="border-left:1px solid #444;height:30px;"></span>
+            <button onclick="saveCurrent()">Opslaan</button>
+            <button onclick="saveAs()" class="btn-alt">Opslaan als...</button>
+            <span style="border-left:1px solid #444;height:30px;"></span>
+            <button onclick="downloadConfig()" class="btn-alt">💾</button>
+            <button onclick="document.getElementById('fileInput').click()" class="btn-alt">📂</button>
+            <input type="file" id="fileInput" style="display:none" onchange="handleFileUpload(event)" accept=".json">
         </div>
-        <label>Duur:</label>
-        <input type="number" id="totalTime" value="8" min="1" style="width:45px;" onchange="updateDuration()">
-        <button onclick="downloadConfig()" class="btn-alt">💾</button>
-        <button onclick="document.getElementById('fileInput').click()" class="btn-alt">📂</button>
-        <input type="file" id="fileInput" style="display:none" onchange="handleFileUpload(event)" accept=".json">
+        <div class="control-row">
+            <div class="slider-group">
+                <label style="font-size:12px;">Chaos</label>
+                <input type="range" id="chaosSlider" min="0" max="100" value="0" oninput="updateChaosLabel(); markUnsaved(); sync(true);">
+                <span id="chaosVal" style="font-size:12px;width:30px;">0%</span>
+            </div>
+            <span style="border-left:1px solid #444;height:30px;"></span>
+            <label>Duur (sec):</label>
+            <input type="number" id="totalTime" value="8" min="1" style="width:55px;" onchange="updateDuration()">
+        </div>
     </div>
     <div class="unsaved-container"><span id="unsavedWarning" class="unsaved-text">⚠️ NIET OPGESLAGEN</span></div>
     <canvas id="envelopeCanvas" width="800" height="400"></canvas>
@@ -141,7 +147,6 @@ function markUnsaved(){ isUnsaved=true; document.getElementById("unsavedWarning"
 function markSaved(name){ 
     isUnsaved = false; 
     document.getElementById("unsavedWarning").style.display = "none"; 
-    
     const sel = document.getElementById("presetSelect");
     let exists = false;
     for(let i=0; i<sel.options.length; i++) {
@@ -153,7 +158,6 @@ function markSaved(name){
             sel.options[i].removeAttribute('selected');
         }
     }
-
     if(exists && name !== "") {
         currentOpenFile = name;
         document.getElementById("currentFileDisplay").innerText = " - " + name;
@@ -179,7 +183,6 @@ function draw(){
     ctx.strokeStyle="#333"; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(0,canvas.height/2); ctx.lineTo(canvas.width,canvas.height/2); ctx.stroke();
     let dur=keyframes[keyframes.length-1].time;
     let elapsed = isDraggingPlayhead ? manualTime : (Date.now()-playStart)%dur;
-    
     if (elapsed < lastElapsed && !isDraggingPlayhead) {
         if(firstCycleDone && ghostPoints.length > 0) { 
             keyframes = [...ghostPoints]; 
@@ -190,7 +193,6 @@ function draw(){
         generateGhost();
     }
     lastElapsed = elapsed;
-
     if (firstCycleDone && ghostPoints.length > 0) {
         ctx.strokeStyle="rgba(0, 191, 255, 0.2)"; ctx.lineWidth=2; ctx.setLineDash([5, 5]); ctx.beginPath();
         ghostPoints.forEach((p,i)=> i?ctx.lineTo(toX(p.time),toY(p.value)):ctx.moveTo(toX(p.time),toY(p.value)));
@@ -247,7 +249,6 @@ async function updatePresetList(targetName){
     const res = await fetch('/list');
     const list = await res.json();
     const sel = document.getElementById("presetSelect"); sel.innerHTML = "";
-    
     list.forEach(f=>{ 
         let o=document.createElement("option"); 
         o.value=o.textContent=f; 
@@ -289,28 +290,16 @@ function updateDuration(){ keyframes[keyframes.length-1].time=document.getElemen
 function applyJson(){ try{const data=JSON.parse(editor.value); if(data.keyframes) keyframes=data.keyframes; else keyframes=data; markUnsaved(); sync();}catch(e){} }
 
 async function init(){
-    const [dataRes, nameRes, listRes] = await Promise.all([
-        fetch('/get_active'),
-        fetch('/get_active_name'),
-        fetch('/list')
-    ]);
-
+    const [dataRes, nameRes, listRes] = await Promise.all([ fetch('/get_active'), fetch('/get_active_name'), fetch('/list') ]);
     const data = await dataRes.json();
     const activeName = await nameRes.text();
     const list = await listRes.json();
-
-    if(data.keyframes) { 
-        keyframes = data.keyframes; 
-        document.getElementById("chaosSlider").value = data.chaos || 0; 
-    } else { 
-        keyframes = data; 
-    }
+    if(data.keyframes) { keyframes = data.keyframes; document.getElementById("chaosSlider").value = data.chaos || 0; }
+    else { keyframes = data; }
     updateChaosLabel();
-
     const validatedName = (list.includes(activeName)) ? activeName : "";
     await updatePresetList(validatedName);
     markSaved(validatedName);
-
     const tRes = await fetch('/get_time');
     const t = await tRes.text();
     playStart = Date.now() - parseInt(t);
