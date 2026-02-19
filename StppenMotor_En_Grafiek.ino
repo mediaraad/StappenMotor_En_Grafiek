@@ -25,13 +25,14 @@ int envelopeSize = 2;
 unsigned long startTime = 0;
 unsigned long loopDuration = 8000;
 int currentSegment = 0; 
+bool isPaused = false;
 
 const char* htmlPage PROGMEM = R"rawliteral(
 <!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Stepper Pro v20.5 - Smart Scale Fix</title>
+<title>Stepper Pro v20.7 - Stop & Revert</title>
 <style>
 body{background:#121212;color:#eee;font-family:sans-serif;text-align:center;margin:0;padding:20px;}
 canvas{background:#1e1e1e;border:2px solid #444;cursor:pointer;touch-action:none;display:block;margin:5px auto;border-radius:8px;box-shadow: 0 4px 15px rgba(0,0,0,0.5);}
@@ -43,6 +44,8 @@ button:hover{background:#009cd1;transform:translateY(-1px);}
 .btn-delete{background:#ff4444 !important;}
 .btn-alt{background:#555 !important;}
 .btn-new{background:#28a745 !important;}
+.btn-play{background:#28a745 !important; width:50px;}
+.btn-stop{background:#ffc107 !important; color:black !important; width:50px;}
 .unsaved-container{height: 25px; margin-bottom:5px;}
 .unsaved-text{color:#ff9900; font-weight:bold; font-size: 13px; display:none;}
 #currentFileDisplay{color:#00ff00; font-weight:bold; margin-left:10px;}
@@ -76,6 +79,9 @@ textarea{width:800px; height:120px; background:#1e1e1e; color:#00ff00; border:1p
                 <span id="chaosVal" style="font-size:12px;width:30px;">0%</span>
             </div>
             <span style="border-left:1px solid #444;height:30px;"></span>
+            <button id="playBtn" onclick="togglePause()" class="btn-play">⏸</button>
+            <button onclick="stopAndReset()" class="btn-stop">■</button>
+            <span style="border-left:1px solid #444;height:30px;"></span>
             <label>Duur (sec):</label>
             <input type="number" id="totalTime" value="8" min="1" style="width:55px;" onchange="updateDuration()">
         </div>
@@ -100,6 +106,7 @@ const canvas=document.getElementById("envelopeCanvas"), ctx=canvas.getContext("2
 let keyframes=[{time:0,value:0},{time:8000,value:0}], originalKeyframes=[];
 let selected=null, playStart=Date.now(), isUnsaved=false, currentOpenFile="";
 let isDraggingPlayhead = false, manualTime = 0, ghostPoints = [], lastElapsed = 0, firstCycleDone = false;
+let pausedTime = 0, isPaused = false;
 
 let modalResolve;
 function openModal(text, showInput=false){ 
@@ -116,6 +123,32 @@ document.getElementById("modalConfirm").onclick=()=>{
     document.getElementById("customModal").style.display="none"; 
     if(modalResolve) modalResolve(val || true); 
 };
+
+function togglePause() {
+    isPaused = !isPaused;
+    const btn = document.getElementById("playBtn");
+    btn.innerText = isPaused ? "▶" : "⏸";
+    if(isPaused) {
+        pausedTime = (Date.now() - playStart) % keyframes[keyframes.length-1].time;
+    } else {
+        playStart = Date.now() - pausedTime;
+    }
+    fetch('/toggle_pause?p=' + (isPaused ? "1" : "0"));
+}
+
+async function stopAndReset() {
+    isPaused = true;
+    document.getElementById("playBtn").innerText = "▶";
+    pausedTime = 0;
+    playStart = Date.now();
+    
+    // Herlaad de opgeslagen versie indien beschikbaar
+    if(currentOpenFile) {
+        await autoLoadPreset(currentOpenFile, true);
+    } else {
+        fetch('/toggle_pause?p=1&reset=1');
+    }
+}
 
 function updateChaosLabel(){ document.getElementById("chaosVal").innerText = document.getElementById("chaosSlider").value + "%"; }
 const toX=(t)=>t*canvas.width/keyframes[keyframes.length-1].time;
@@ -182,8 +215,9 @@ function draw(){
     ctx.clearRect(0,0,canvas.width,canvas.height);
     ctx.strokeStyle="#333"; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(0,canvas.height/2); ctx.lineTo(canvas.width,canvas.height/2); ctx.stroke();
     let dur=keyframes[keyframes.length-1].time;
-    let elapsed = isDraggingPlayhead ? manualTime : (Date.now()-playStart)%dur;
-    if (elapsed < lastElapsed && !isDraggingPlayhead) {
+    let elapsed = isDraggingPlayhead ? manualTime : (isPaused ? pausedTime : (Date.now()-playStart)%dur);
+    
+    if (!isPaused && !isDraggingPlayhead && elapsed < lastElapsed) {
         if(firstCycleDone && ghostPoints.length > 0) { 
             keyframes = [...ghostPoints]; 
             const data = { chaos: parseInt(document.getElementById("chaosSlider").value), keyframes: keyframes };
@@ -209,7 +243,12 @@ function draw(){
 canvas.onmousedown=(e)=>{
     const rect=canvas.getBoundingClientRect(), x=e.clientX-rect.left, y=e.clientY-rect.top;
     let dur=keyframes[keyframes.length-1].time;
-    if(Math.abs(x - toX((Date.now()-playStart)%dur)) < 30) { isDraggingPlayhead = true; manualTime = (Date.now()-playStart)%dur; return; }
+    let currentPos = isPaused ? pausedTime : (Date.now()-playStart)%dur;
+    if(Math.abs(x - toX(currentPos)) < 30) { 
+        isDraggingPlayhead = true; 
+        manualTime = currentPos; 
+        return; 
+    }
     selected=keyframes.find(p=>Math.hypot(toX(p.time)-x,toY(p.value)-y)<15);
     if(!selected){ keyframes.push({time:fromX(x),value:fromY(y)}); keyframes.sort((a,b)=>a.time-b.time); markUnsaved(); sync(); }
 };
@@ -233,12 +272,19 @@ window.onmousemove=(e)=>{
     keyframes.sort((a,b)=>a.time-b.time); markUnsaved(); sync();
 };
 
-window.onmouseup=()=>{ if(isDraggingPlayhead) { playStart = Date.now() - manualTime; fetch('/reset_clock_to?t=' + Math.round(manualTime)); } selected=null; isDraggingPlayhead = false; };
+window.onmouseup=()=>{ 
+    if(isDraggingPlayhead) { 
+        if(isPaused) pausedTime = manualTime;
+        else playStart = Date.now() - manualTime; 
+        fetch('/reset_clock_to?t=' + Math.round(manualTime)); 
+    } 
+    selected=null; isDraggingPlayhead = false; 
+};
 
-async function autoLoadPreset(targetName){
+async function autoLoadPreset(targetName, forceRevert=false){
     const name = targetName || document.getElementById("presetSelect").value;
     if(!name || name === "") return;
-    if(isUnsaved && !targetName && !await openModal("Wijzigingen gaan verloren. Doorgaan?")){ 
+    if(isUnsaved && !targetName && !forceRevert && !await openModal("Wijzigingen gaan verloren. Doorgaan?")){ 
         document.getElementById("presetSelect").value = currentOpenFile || ""; 
         return; 
     }
@@ -248,7 +294,15 @@ async function autoLoadPreset(targetName){
     if(data.keyframes) { keyframes = data.keyframes; document.getElementById("chaosSlider").value = data.chaos || 0; }
     else { keyframes = data; document.getElementById("chaosSlider").value = 0; }
     updateChaosLabel(); firstCycleDone = false; ghostPoints = [];
-    markSaved(name); await sync(true); playStart=Date.now(); fetch('/reset_clock_to?t=0');
+    markSaved(name); await sync(true); 
+    
+    if(forceRevert) {
+        isPaused = true;
+        document.getElementById("playBtn").innerText = "▶";
+        pausedTime = 0;
+        playStart = Date.now();
+        fetch('/toggle_pause?p=1&reset=1');
+    }
 }
 
 async function updatePresetList(targetName){
@@ -273,7 +327,7 @@ async function deletePreset(){
     if(newList.length > 0) autoLoadPreset(newList[0]); else createNew();
 }
 
-function createNew(){ keyframes=[{time:0,value:0},{time:8000,value:0}]; document.getElementById("chaosSlider").value=0; updateChaosLabel(); firstCycleDone=false; ghostPoints=[]; markSaved(""); updatePresetList(); sync(true); fetch('/reset_clock_to?t=0'); }
+function createNew(){ keyframes=[{time:0,value:0},{time:8000,value:0}]; document.getElementById("chaosSlider").value=0; updateChaosLabel(); firstCycleDone=false; ghostPoints=[]; markSaved(""); updatePresetList(); sync(true); stopAndReset(); }
 function performSave(n){ fetch('/save?name='+n,{method:'POST',body:JSON.stringify(getExportData())}).then(()=>{markSaved(n);updatePresetList(n);}); }
 async function saveCurrent(){ if(!currentOpenFile)saveAs(); else if(await openModal("Bestand '" + currentOpenFile + "' overschrijven?")) performSave(currentOpenFile); }
 async function saveAs(){ let n=await openModal("Sla configuratie op als:", true); if(n && typeof n === 'string') performSave(n.trim().replace(/[^a-z0-9_-]/gi,'_')); }
@@ -286,7 +340,7 @@ async function handleFileUpload(e){
             let name=file.name.replace(".json","").replace(/[^a-z0-9_-]/gi,'_');
             await fetch('/save?name='+name,{method:'POST',body:JSON.stringify(data)});
             if(data.keyframes) keyframes=data.keyframes; else keyframes=data;
-            markSaved(name); await updatePresetList(name); await sync(true);
+            markSaved(name); await updatePresetList(name); await sync(true); stopAndReset();
         }catch(err){alert("Fout");}
     };
     reader.readAsText(file); e.target.value="";
@@ -299,6 +353,7 @@ function updateDuration(){
     if(oldDur <= 0 || newDur <= 0) return;
     const factor = newDur / oldDur;
     keyframes.forEach(p => { p.time = Math.round(p.time * factor); });
+    if(isPaused) pausedTime *= factor;
     markUnsaved(); sync(); 
 }
 
@@ -351,6 +406,11 @@ void setup() {
   WiFi.mode(WIFI_AP_STA); WiFi.softAP(ap_ssid, ap_pass); WiFi.begin(ssid_home, pass_home); MDNS.begin(mdns_name);
   server.on("/", [](){ server.send(200, "text/html", htmlPage); });
   server.on("/get_time", [](){ server.send(200, "text/plain", String((millis() - startTime) % loopDuration)); });
+  server.on("/toggle_pause", [](){ 
+    if(server.hasArg("p")) isPaused = (server.arg("p") == "1");
+    if(server.hasArg("reset")) { startTime = millis(); currentSegment = 0; }
+    server.send(200); 
+  });
   server.on("/set_live", HTTP_POST, [](){
     if(server.hasArg("plain")) { loadFromJSON(server.arg("plain")); File f = LittleFS.open("/active.json", "w"); f.print(server.arg("plain")); f.close(); }
     server.send(200);
@@ -395,6 +455,10 @@ void setup() {
 
 void loop() {
   server.handleClient();
+  if (isPaused) {
+    for (int i = 0; i < 4; i++) digitalWrite(motorPins[i], LOW);
+    return;
+  }
   unsigned long t = (millis() - startTime) % loopDuration;
   if (t < envelope[currentSegment].time) currentSegment = 0;
   while (currentSegment < envelopeSize - 1 && t > envelope[currentSegment + 1].time) {
