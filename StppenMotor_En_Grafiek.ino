@@ -199,9 +199,12 @@ async function init(){
     const res = await fetch('/get_active');
     keyframes = await res.json();
     const n = await fetch('/get_active_name').then(r=>r.text());
-    markSaved(n==="Geen"?"":n);
+    
+    // Eerst de lijst ophalen, daarna pas markSaved aanroepen zodat de select-box de waarde kan aannemen
     await updatePresetList();
-    sync(); // FIX: Vul editor direct bij opstarten
+    markSaved(n==="Geen"?"":n);
+    
+    sync(); // Vul editor direct bij opstarten
     draw();
 }
 init();
