@@ -31,7 +31,7 @@ const char* htmlPage PROGMEM = R"rawliteral(
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Stepper Pro v20.4 - DoubleClick Fix</title>
+<title>Stepper Pro v20.5 - Smart Scale Fix</title>
 <style>
 body{background:#121212;color:#eee;font-family:sans-serif;text-align:center;margin:0;padding:20px;}
 canvas{background:#1e1e1e;border:2px solid #444;cursor:pointer;touch-action:none;display:block;margin:5px auto;border-radius:8px;box-shadow: 0 4px 15px rgba(0,0,0,0.5);}
@@ -292,7 +292,16 @@ async function handleFileUpload(e){
     reader.readAsText(file); e.target.value="";
 }
 function downloadConfig(){ const a=document.createElement('a'); a.href="data:text/json;charset=utf-8,"+encodeURIComponent(JSON.stringify(getExportData(),null,2)); a.download=(currentOpenFile||"config")+".json"; a.click(); }
-function updateDuration(){ keyframes[keyframes.length-1].time=document.getElementById("totalTime").value*1000; markUnsaved(); sync(); }
+
+function updateDuration(){ 
+    const oldDur = keyframes[keyframes.length-1].time;
+    const newDur = document.getElementById("totalTime").value * 1000;
+    if(oldDur <= 0 || newDur <= 0) return;
+    const factor = newDur / oldDur;
+    keyframes.forEach(p => { p.time = Math.round(p.time * factor); });
+    markUnsaved(); sync(); 
+}
+
 function applyJson(){ try{const data=JSON.parse(editor.value); if(data.keyframes) keyframes=data.keyframes; else keyframes=data; markUnsaved(); sync();}catch(e){} }
 
 async function init(){
