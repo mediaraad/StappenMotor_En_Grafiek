@@ -22,7 +22,6 @@ const float MAX_STEPS_PER_SEC = 800.0;
 const int steps[8][4] = {{1,0,0,0},{1,1,0,0},{0,1,0,0},{0,1,1,0},{0,0,1,0},{0,0,1,1},{0,0,0,1},{1,0,0,1}};
 
 long motorPosition = 0;
-bool isHoming = false;
 
 struct Keyframe { unsigned long time; float value; };
 Keyframe envelope[50];
@@ -37,11 +36,13 @@ const char* htmlPage PROGMEM = R"rawliteral(
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Stepper Pro v21.3 - Clean Editor</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stepper Pro v21.6 - Fixed New</title>
 <style>
 body{background:#121212;color:#eee;font-family:sans-serif;text-align:center;margin:0;padding:20px;}
-canvas{background:#1e1e1e;border:2px solid #444;cursor:pointer;touch-action:none;display:block;margin:5px auto;border-radius:8px;box-shadow: 0 4px 15px rgba(0,0,0,0.5);}
-.controls{background:#2a2a2a;padding:15px;border-radius:8px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;margin:0 auto 10px auto;border:1px solid #444;max-width:950px;box-sizing:border-box;box-shadow: 0 2px 10px rgba(0,0,0,0.3);}
+#canvasContainer{width:100%; max-width:1200px; margin:0 auto; position:relative;}
+canvas{background:#1e1e1e;border:2px solid #444;cursor:pointer;touch-action:none;display:block;width:100%;border-radius:8px;box-shadow: 0 4px 15px rgba(0,0,0,0.5);}
+.controls{background:#2a2a2a;padding:15px;border-radius:8px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;margin:0 auto 10px auto;border:1px solid #444;max-width:1200px;box-sizing:border-box;box-shadow: 0 2px 10px rgba(0,0,0,0.3);}
 .control-row{display:flex; align-items:center; justify-content:center; gap:10px; flex-wrap:wrap;}
 input,button,select{height:42px; padding:0 10px; border-radius:4px;border:none;background:#444;color:white;outline:none;font-size:14px;transition:0.2s;}
 button{background:#00bfff;cursor:pointer;font-weight:bold;}
@@ -51,14 +52,13 @@ button:hover{background:#009cd1;transform:translateY(-1px);}
 .btn-new{background:#28a745 !important;}
 .btn-play{background:#28a745 !important; width:50px;}
 .btn-stop{background:#ffc107 !important; color:black !important; width:50px;}
-.btn-home{background:#9b59b6 !important; color:white !important;}
 .unsaved-container{height: 25px; margin-bottom:5px;}
 .unsaved-text{color:#ff9900; font-weight:bold; font-size: 13px; display:none;}
 #currentFileDisplay{color:#00ff00; font-weight:bold; margin-left:10px;}
-textarea{width:800px; height:120px; background:#1e1e1e; color:#00ff00; border:1px solid #444; font-family:monospace; margin-top:10px; padding:10px; border-radius:8px;}
+textarea{width:100%; max-width:1200px; height:120px; background:#1e1e1e; color:#00ff00; border:1px solid #444; font-family:monospace; margin-top:10px; padding:10px; border-radius:8px; box-sizing:border-box;}
 .slider-group{display:flex; align-items:center; gap:5px; background:#333; padding:0 10px; border-radius:4px; height:42px;}
 #customModal{display:none; position:fixed; z-index:1000; left:0; top:0; width:100%; height:100%; background:rgba(0,0,0,0.85); backdrop-filter:blur(5px);}
-.modal-content{background:#2a2a2a; margin:15% auto; padding:30px; border:1px solid #00bfff; width:350px; border-radius:16px;}
+.modal-content{background:#2a2a2a; margin:15% auto; padding:30px; border:1px solid #00bfff; width:300px; border-radius:16px;}
 #modalInput{width:100%; margin-bottom:20px; text-align:center; display:none; background:#1e1e1e; border:1px solid #444; color:white; height:35px;}
 .modal-btns{display:flex; justify-content:center; gap:15px;}
 </style>
@@ -87,14 +87,15 @@ textarea{width:800px; height:120px; background:#1e1e1e; color:#00ff00; border:1p
             <span style="border-left:1px solid #444;height:30px;"></span>
             <button id="playBtn" onclick="togglePause()" class="btn-play">⏸</button>
             <button onclick="stopAndReset()" class="btn-stop">■</button>
-            <button onclick="goHome()" class="btn-home">🏠 Home</button>
             <span style="border-left:1px solid #444;height:30px;"></span>
             <label>Duur (sec):</label>
             <input type="number" id="totalTime" value="8" min="1" style="width:55px;" onchange="updateDuration()">
         </div>
     </div>
     <div class="unsaved-container"><span id="unsavedWarning" class="unsaved-text">⚠️ NIET OPGESLAGEN</span></div>
-    <canvas id="envelopeCanvas" width="800" height="400"></canvas>
+    <div id="canvasContainer">
+        <canvas id="envelopeCanvas" height="400"></canvas>
+    </div>
     <textarea id="jsonEditor" spellcheck="false" oninput="applyJson()"></textarea>
 
     <div id="customModal">
@@ -114,6 +115,13 @@ let keyframes=[{time:0,value:0},{time:8000,value:0}], originalKeyframes=[];
 let selected=null, playStart=Date.now(), isUnsaved=false, currentOpenFile="";
 let isDraggingPlayhead = false, manualTime = 0, ghostPoints = [], lastElapsed = 0, firstCycleDone = false;
 let pausedTime = 0, isPaused = false;
+
+function resizeCanvas() {
+    const container = document.getElementById("canvasContainer");
+    canvas.width = container.clientWidth;
+}
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
 
 let modalResolve;
 function openModal(text, showInput=false){ 
@@ -153,12 +161,6 @@ async function stopAndReset() {
     } else {
         fetch('/toggle_pause?p=1&reset=1');
     }
-}
-
-function goHome() {
-    isPaused = true;
-    document.getElementById("playBtn").innerText = "▶";
-    fetch('/go_home');
 }
 
 function updateChaosLabel(){ document.getElementById("chaosVal").innerText = document.getElementById("chaosSlider").value + "%"; }
@@ -201,6 +203,8 @@ function markSaved(name){
             sel.options[i].removeAttribute('selected');
         }
     }
+    if(!name || name === "") sel.selectedIndex = -1;
+
     if(exists && name !== "") {
         currentOpenFile = name;
         document.getElementById("currentFileDisplay").innerText = " - " + name;
@@ -212,7 +216,6 @@ function markSaved(name){
 }
 
 function getExportData() { 
-    // Rondt getallen af voor schone opslag en weergave
     const cleanKeyframes = (originalKeyframes.length > 0 ? originalKeyframes : keyframes).map(kp => ({
         time: Math.round(kp.time),
         value: Math.round(kp.value * 100) / 100
@@ -258,7 +261,7 @@ function draw(){
 }
 
 canvas.onmousedown=(e)=>{
-    const rect=canvas.getBoundingClientRect(), x=e.clientX-rect.left, y=e.clientY-rect.top;
+    const rect=canvas.getBoundingClientRect(), x=(e.clientX-rect.left)*(canvas.width/rect.width), y=e.clientY-rect.top;
     let dur=keyframes[keyframes.length-1].time;
     let currentPos = isPaused ? pausedTime : (Date.now()-playStart)%dur;
     if(Math.abs(x - toX(currentPos)) < 30) { 
@@ -271,17 +274,17 @@ canvas.onmousedown=(e)=>{
 };
 
 canvas.ondblclick=(e)=>{
-    const rect=canvas.getBoundingClientRect(), x=e.clientX-rect.left, y=e.clientY-rect.top;
+    const rect=canvas.getBoundingClientRect(), x=(e.clientX-rect.left)*(canvas.width/rect.width), y=e.clientY-rect.top;
     const pIdx=keyframes.findIndex(p=>Math.hypot(toX(p.time)-x,toY(p.value)-y)<15);
     if(pIdx>0 && pIdx<keyframes.length-1){ keyframes.splice(pIdx,1); markUnsaved(); sync(); }
 };
 
 window.onmousemove=(e)=>{
-    if(isDraggingPlayhead) { manualTime = Math.max(0, Math.min(keyframes[keyframes.length-1].time, fromX(e.clientX-canvas.getBoundingClientRect().left))); return; }
-    if(!selected) return;
     const rect=canvas.getBoundingClientRect();
+    if(isDraggingPlayhead) { manualTime = Math.max(0, Math.min(keyframes[keyframes.length-1].time, fromX((e.clientX-rect.left)*(canvas.width/rect.width)))); return; }
+    if(!selected) return;
     if(selected!==keyframes[0] && selected!==keyframes[keyframes.length-1]) {
-        let t = fromX(e.clientX-rect.left);
+        let t = fromX((e.clientX-rect.left)*(canvas.width/rect.width));
         let idx = keyframes.indexOf(selected);
         selected.time = Math.round(Math.max(keyframes[idx-1].time + 10, Math.min(keyframes[idx+1].time - 10, t)));
     }
@@ -332,6 +335,7 @@ async function updatePresetList(targetName){
         if(f === targetName) o.setAttribute('selected', 'selected');
         sel.appendChild(o); 
     });
+    if(!targetName) sel.selectedIndex = -1;
     return list;
 }
 
@@ -344,7 +348,18 @@ async function deletePreset(){
     if(newList.length > 0) autoLoadPreset(newList[0]); else createNew();
 }
 
-function createNew(){ keyframes=[{time:0,value:0},{time:8000,value:0}]; document.getElementById("chaosSlider").value=0; updateChaosLabel(); firstCycleDone=false; ghostPoints=[]; markSaved(""); updatePresetList(); sync(true); stopAndReset(); }
+function createNew(){ 
+    keyframes=[{time:0,value:0},{time:8000,value:0}]; 
+    document.getElementById("chaosSlider").value=0; 
+    updateChaosLabel(); 
+    firstCycleDone=false; 
+    ghostPoints=[]; 
+    markSaved(""); 
+    updatePresetList(); 
+    sync(true); 
+    stopAndReset(); 
+}
+
 function performSave(n){ fetch('/save?name='+n,{method:'POST',body:JSON.stringify(getExportData())}).then(()=>{markSaved(n);updatePresetList(n);}); }
 async function saveCurrent(){ if(!currentOpenFile)saveAs(); else if(await openModal("Bestand '" + currentOpenFile + "' overschrijven?")) performSave(currentOpenFile); }
 async function saveAs(){ let n=await openModal("Sla configuratie op als:", true); if(n && typeof n === 'string') performSave(n.trim().replace(/[^a-z0-9_-]/gi,'_')); }
@@ -428,7 +443,6 @@ void setup() {
     if(server.hasArg("reset")) { startTime = millis(); currentSegment = 0; }
     server.send(200); 
   });
-  server.on("/go_home", [](){ isHoming = true; isPaused = true; server.send(200); });
   server.on("/set_live", HTTP_POST, [](){
     if(server.hasArg("plain")) { loadFromJSON(server.arg("plain")); File f = LittleFS.open("/active.json", "w"); f.print(server.arg("plain")); f.close(); }
     server.send(200);
@@ -474,21 +488,6 @@ void setup() {
 void loop() {
   server.handleClient();
   
-  if (isHoming) {
-    if (motorPosition == 0) {
-      isHoming = false;
-      for (int i = 0; i < 4; i++) digitalWrite(motorPins[i], LOW);
-    } else {
-      if (micros() - lastStepMicros >= 1250) { 
-        lastStepMicros = micros();
-        if (motorPosition > 0) { motorPosition--; stepIndex = (stepIndex + 7) % 8; }
-        else { motorPosition++; stepIndex = (stepIndex + 1) % 8; }
-        for (int i = 0; i < 4; i++) digitalWrite(motorPins[i], steps[stepIndex][i]);
-      }
-    }
-    return;
-  }
-
   if (isPaused) {
     for (int i = 0; i < 4; i++) digitalWrite(motorPins[i], LOW);
     return;
