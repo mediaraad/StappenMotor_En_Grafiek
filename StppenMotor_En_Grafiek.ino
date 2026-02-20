@@ -21,7 +21,6 @@ unsigned long lastStepMicros = 0;
 const float MAX_STEPS_PER_SEC = 800.0;
 const int steps[8][4] = {{1,0,0,0},{1,1,0,0},{0,1,0,0},{0,1,1,0},{0,0,1,0},{0,0,1,1},{0,0,0,1},{1,0,0,1}};
 
-// Positie beheer
 long motorPosition = 0;
 bool isHoming = false;
 
@@ -38,7 +37,7 @@ const char* htmlPage PROGMEM = R"rawliteral(
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Stepper Pro v20.8 - Home Position</title>
+<title>Stepper Pro v20.9 - Chaos Fix</title>
 <style>
 body{background:#121212;color:#eee;font-family:sans-serif;text-align:center;margin:0;padding:20px;}
 canvas{background:#1e1e1e;border:2px solid #444;cursor:pointer;touch-action:none;display:block;margin:5px auto;border-radius:8px;box-shadow: 0 4px 15px rgba(0,0,0,0.5);}
@@ -172,19 +171,27 @@ function generateGhost() {
     const chaos = document.getElementById("chaosSlider").value / 100;
     if(chaos <= 0) { ghostPoints = []; return; }
     const source = originalKeyframes.length > 0 ? originalKeyframes : keyframes;
-    const maxDur = source[source.length-1].time;
-    const jitterT = maxDur * 0.1 * chaos; 
-    const jitterV = 25 * chaos; 
-
+    
     ghostPoints = source.map((p, i) => {
         if (i === 0 || i === source.length - 1) return { ...p };
-        let newTime = p.time + (Math.random() - 0.5) * jitterT;
-        const minT = source[i-1].time + 10;
-        const maxT = source[i+1].time - 10;
-        newTime = Math.max(minT, Math.min(maxT, newTime));
-        return { time: newTime, value: Math.max(-100, Math.min(100, p.value + (Math.random() - 0.5) * jitterV)) };
+        
+        // Bereken de maximale ruimte tot de buren om oversteken te voorkomen
+        const prevT = source[i-1].time;
+        const nextT = source[i+1].time;
+        const margin = (nextT - prevT) * 0.4 * chaos; // Max 40% van de tussenruimte verschuiven
+        
+        let newTime = p.time + (Math.random() - 0.5) * margin * 2;
+        // Harde grens: altijd minstens 10ms afstand tot buren
+        newTime = Math.max(prevT + 10, Math.min(nextT - 10, newTime));
+        
+        const jitterV = 25 * chaos; 
+        let newValue = p.value + (Math.random() - 0.5) * jitterV;
+        
+        return { 
+            time: newTime, 
+            value: Math.max(-100, Math.min(100, newValue)) 
+        };
     });
-    ghostPoints.sort((a,b) => a.time - b.time);
 }
 
 function markUnsaved(){ isUnsaved=true; document.getElementById("unsavedWarning").style.display="inline-block"; originalKeyframes = JSON.parse(JSON.stringify(keyframes)); }
@@ -469,13 +476,12 @@ void setup() {
 void loop() {
   server.handleClient();
   
-  // Homing logica
   if (isHoming) {
     if (motorPosition == 0) {
       isHoming = false;
       for (int i = 0; i < 4; i++) digitalWrite(motorPins[i], LOW);
     } else {
-      if (micros() - lastStepMicros >= 1250) { // Constante snelheid voor homing
+      if (micros() - lastStepMicros >= 1250) { 
         lastStepMicros = micros();
         if (motorPosition > 0) { motorPosition--; stepIndex = (stepIndex + 7) % 8; }
         else { motorPosition++; stepIndex = (stepIndex + 1) % 8; }
