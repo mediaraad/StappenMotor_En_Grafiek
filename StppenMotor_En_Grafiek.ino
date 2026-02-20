@@ -29,7 +29,7 @@ int envelopeSize = 2;
 unsigned long startTime = 0;
 unsigned long loopDuration = 8000;
 int currentSegment = 0; 
-bool isPaused = false; // Aangepast naar false voor auto-start na reset
+bool isPaused = false; 
 
 const char* htmlPage PROGMEM = R"rawliteral(
 <!DOCTYPE html>
@@ -37,7 +37,7 @@ const char* htmlPage PROGMEM = R"rawliteral(
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Stepper Pro v21.18 - Auto-Start</title>
+<title>Stepper Pro v21.22 - Delete Restored</title>
 <style>
 body{background:#121212;color:#eee;font-family:sans-serif;text-align:center;margin:0;padding:20px;}
 #canvasContainer{width:100%; max-width:1200px; margin:0 auto; position:relative;}
@@ -93,7 +93,7 @@ textarea{width:100%; max-width:1200px; height:120px; background:#1e1e1e; color:#
             <label>Duur (sec):</label>
             <input type="number" id="totalTime" value="8" min="1" style="width:55px;" onchange="updateDuration()">
         </div>
-        <div class="help-text">Klik: Punt toevoegen | Sleep: Kader | J: Join | X/Y: Uitlijnen | Esc: Deselecteer</div>
+        <div class="help-text">Klik: Punt toevoegen | Sleep: Kader | Del/Back: Wis | J: Join | X/Y: Lijn uit | Esc: Deselecteer</div>
     </div>
     <div class="locked-info" id="lockedStatus"></div>
     <div class="unsaved-container"><span id="unsavedWarning" class="unsaved-text">⚠️ NIET OPGESLAGEN</span></div>
@@ -117,15 +117,10 @@ textarea{width:100%; max-width:1200px; height:120px; background:#1e1e1e; color:#
 const canvas=document.getElementById("envelopeCanvas"), ctx=canvas.getContext("2d"), editor=document.getElementById("jsonEditor");
 let keyframes=[{time:0,value:0},{time:8000,value:0}], originalKeyframes=[];
 let selectedPoints=[];
-let draggingPoint=null, lastMouseX=0, lastMouseY=0;
-let historyStack = [];
+let draggingPoint=null, lastMouseX=0, lastMouseY=0, historyStack = [];
 let playStart=Date.now(), isUnsaved=false, currentOpenFile="";
-let isDraggingPlayhead = false, manualTime = 0, ghostPoints = [], lastElapsed = 0, firstCycleDone = false;
-let pausedTime = 0, isPaused = false; 
-
-let isSelectingBox = false;
-let hasMovedForBox = false;
-let boxStart = {x:0, y:0}, boxEnd = {x:0, y:0};
+let isDraggingPlayhead = false, manualTime = 0, ghostPoints = [], lastElapsed = 0, firstCycleDone = false, pausedTime = 0, isPaused = false; 
+let isSelectingBox = false, hasMovedForBox = false, boxStart = {x:0, y:0}, boxEnd = {x:0, y:0};
 
 function isLocked() { return !isPaused || pausedTime !== 0; }
 
@@ -145,9 +140,7 @@ function undo() {
     if(isLocked()) return;
     if(historyStack.length > 0) {
         keyframes = JSON.parse(historyStack.pop());
-        selectedPoints = [];
-        markUnsaved();
-        sync();
+        selectedPoints = []; markUnsaved(); sync();
     }
 }
 
@@ -175,19 +168,13 @@ function updatePlayButtonUI() {
 function togglePause() {
     isPaused = !isPaused;
     updatePlayButtonUI();
-    if(isPaused) {
-        pausedTime = (Date.now() - playStart) % keyframes[keyframes.length-1].time;
-    } else {
-        playStart = Date.now() - pausedTime;
-    }
+    if(isPaused) pausedTime = (Date.now() - playStart) % keyframes[keyframes.length-1].time;
+    else playStart = Date.now() - pausedTime;
     fetch('/toggle_pause?p=' + (isPaused ? "1" : "0"));
 }
 
 async function stopAndReset() {
-    isPaused = true;
-    updatePlayButtonUI();
-    pausedTime = 0;
-    playStart = Date.now();
+    isPaused = true; updatePlayButtonUI(); pausedTime = 0; playStart = Date.now();
     fetch('/toggle_pause?p=1&reset=1');
 }
 
@@ -203,41 +190,29 @@ function generateGhost() {
     const source = originalKeyframes.length > 0 ? originalKeyframes : keyframes;
     ghostPoints = source.map((p, i) => {
         if (i === 0 || i === source.length - 1) return { ...p };
-        const prevT = source[i-1].time;
-        const nextT = source[i+1].time;
+        const prevT = source[i-1].time, nextT = source[i+1].time;
         const margin = (nextT - prevT) * 0.4 * chaos;
-        let newTime = p.time + (Math.random() - 0.5) * margin * 2;
-        newTime = Math.round(Math.max(prevT + 10, Math.min(nextT - 10, newTime)));
-        const jitterV = 25 * chaos; 
-        let newValue = p.value + (Math.random() - 0.5) * jitterV;
-        return { time: newTime, value: Math.max(-100, Math.min(100, newValue)) };
+        let newTime = Math.round(Math.max(prevT + 10, Math.min(nextT - 10, p.time + (Math.random() - 0.5) * margin * 2)));
+        let newValue = Math.max(-100, Math.min(100, p.value + (Math.random() - 0.5) * 25 * chaos));
+        return { time: newTime, value: newValue };
     });
 }
 
 function markUnsaved(){ isUnsaved=true; document.getElementById("unsavedWarning").style.display="inline-block"; originalKeyframes = JSON.parse(JSON.stringify(keyframes)); }
 
 function markSaved(name){ 
-    isUnsaved = false; 
-    document.getElementById("unsavedWarning").style.display = "none"; 
+    isUnsaved = false; document.getElementById("unsavedWarning").style.display = "none"; 
     const sel = document.getElementById("presetSelect");
     let exists = false;
     for(let i=0; i<sel.options.length; i++) {
-        if(sel.options[i].value === name) {
-            exists = true; sel.selectedIndex = i; sel.options[i].setAttribute('selected', 'selected');
-        } else sel.options[i].removeAttribute('selected');
+        if(sel.options[i].value === name) { exists = true; sel.selectedIndex = i; }
     }
-    if(!name || name === "") sel.selectedIndex = -1;
-    if(exists && name !== "") { currentOpenFile = name; document.getElementById("currentFileDisplay").innerText = " - " + name; }
-    else if (name !== "") { currentOpenFile = name; document.getElementById("currentFileDisplay").innerText = " - " + name; }
-    else { currentOpenFile = ""; document.getElementById("currentFileDisplay").innerText = ""; }
+    currentOpenFile = name; document.getElementById("currentFileDisplay").innerText = name ? " - " + name : "";
     originalKeyframes = JSON.parse(JSON.stringify(keyframes));
 }
 
 function getExportData() { 
-    const cleanKeyframes = (originalKeyframes.length > 0 ? originalKeyframes : keyframes).map(kp => ({
-        time: Math.round(kp.time), value: Math.round(kp.value * 100) / 100
-    }));
-    return { chaos: parseInt(document.getElementById("chaosSlider").value), keyframes: cleanKeyframes }; 
+    return { chaos: parseInt(document.getElementById("chaosSlider").value), keyframes: keyframes.map(kp => ({time: Math.round(kp.time), value: Math.round(kp.value * 100) / 100})) }; 
 }
 
 function sync(skipGhost=false){ 
@@ -253,137 +228,78 @@ function draw(){
     const locked = isLocked();
     canvas.style.cursor = locked ? "not-allowed" : "pointer";
     document.getElementById("lockedStatus").innerText = locked ? "LOCKED: Druk eerst op ■ om te editen" : "";
-
     ctx.strokeStyle="#333"; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(0,canvas.height/2); ctx.lineTo(canvas.width,canvas.height/2); ctx.stroke();
-    let dur=keyframes[keyframes.length-1].time;
-    let elapsed = isDraggingPlayhead ? manualTime : (isPaused ? pausedTime : (Date.now()-playStart)%dur);
-    
+    let dur=keyframes[keyframes.length-1].time, elapsed = isDraggingPlayhead ? manualTime : (isPaused ? pausedTime : (Date.now()-playStart)%dur);
     if (!isPaused && !isDraggingPlayhead && elapsed < lastElapsed) {
         if(firstCycleDone && ghostPoints.length > 0) { 
-            keyframes = [...ghostPoints]; 
-            const data = { chaos: parseInt(document.getElementById("chaosSlider").value), keyframes: keyframes };
-            fetch('/set_live',{method:'POST',body:JSON.stringify(data)}); 
+            keyframes = [...ghostPoints]; fetch('/set_live',{method:'POST',body:JSON.stringify(getExportData())}); 
         }
         firstCycleDone = true; generateGhost();
     }
     lastElapsed = elapsed;
     if (firstCycleDone && ghostPoints.length > 0) {
         ctx.strokeStyle="rgba(0, 191, 255, 0.2)"; ctx.lineWidth=2; ctx.setLineDash([5, 5]); ctx.beginPath();
-        ghostPoints.forEach((p,i)=> i?ctx.lineTo(toX(p.time),toY(p.value)):ctx.moveTo(toX(p.time),toY(p.value)));
-        ctx.stroke(); ctx.setLineDash([]);
+        ghostPoints.forEach((p,i)=> i?ctx.lineTo(toX(p.time),toY(p.value)):ctx.moveTo(toX(p.time),toY(p.value))); ctx.stroke(); ctx.setLineDash([]);
     }
     ctx.strokeStyle="#00bfff"; ctx.lineWidth=3; ctx.beginPath();
-    keyframes.forEach((p,i)=> i?ctx.lineTo(toX(p.time),toY(p.value)):ctx.moveTo(toX(p.time),toY(p.value)));
-    ctx.stroke();
-    
+    keyframes.forEach((p,i)=> i?ctx.lineTo(toX(p.time),toY(p.value)):ctx.moveTo(toX(p.time),toY(p.value))); ctx.stroke();
     keyframes.forEach(p => {
-        const isSelected = selectedPoints.includes(p);
-        ctx.beginPath(); ctx.arc(toX(p.time), toY(p.value), 6, 0, 7);
+        const isSelected = selectedPoints.includes(p); ctx.beginPath(); ctx.arc(toX(p.time), toY(p.value), 6, 0, 7);
         ctx.fillStyle = isSelected ? "#ffffff" : "#ff9900"; ctx.fill();
         if(isSelected) { ctx.strokeStyle = "#00bfff"; ctx.lineWidth = 2; ctx.stroke(); }
     });
-
     if(isSelectingBox && hasMovedForBox) {
         ctx.fillStyle = "rgba(0, 191, 255, 0.2)"; ctx.strokeStyle = "#00bfff"; ctx.setLineDash([5, 5]);
         ctx.fillRect(boxStart.x, boxStart.y, boxEnd.x - boxStart.x, boxEnd.y - boxStart.y);
-        ctx.strokeRect(boxStart.x, boxStart.y, boxEnd.x - boxStart.x, boxEnd.y - boxStart.y);
-        ctx.setLineDash([]);
+        ctx.strokeRect(boxStart.x, boxStart.y, boxEnd.x - boxStart.x, boxEnd.y - boxStart.y); ctx.setLineDash([]);
     }
-
     ctx.strokeStyle="red"; ctx.lineWidth=3; ctx.beginPath(); ctx.moveTo(toX(elapsed),0); ctx.lineTo(toX(elapsed),canvas.height); ctx.stroke();
     requestAnimationFrame(draw);
 }
 
 canvas.onmousedown=(e)=>{
     const rect=canvas.getBoundingClientRect(), x=(e.clientX-rect.left)*(canvas.width/rect.width), y=e.clientY-rect.top;
-    let dur=keyframes[keyframes.length-1].time;
-    let currentPos = isPaused ? pausedTime : (Date.now()-playStart)%dur;
-    
+    let dur=keyframes[keyframes.length-1].time, currentPos = isPaused ? pausedTime : (Date.now()-playStart)%dur;
     if(Math.abs(x - toX(currentPos)) < 30) { isDraggingPlayhead = true; manualTime = currentPos; return; }
     if(isLocked()) return; 
-
     lastMouseX = x; lastMouseY = y;
     let hit = keyframes.find(p=>Math.hypot(toX(p.time)-x,toY(p.value)-y)<15);
-    
     if(hit) {
         saveToHistory();
-        if(e.shiftKey) {
-            if(selectedPoints.includes(hit)) selectedPoints = selectedPoints.filter(p => p !== hit);
-            else selectedPoints.push(hit);
-        } else { if(!selectedPoints.includes(hit)) selectedPoints = [hit]; }
+        if(e.shiftKey) { if(selectedPoints.includes(hit)) selectedPoints = selectedPoints.filter(p => p !== hit); else selectedPoints.push(hit); } 
+        else { if(!selectedPoints.includes(hit)) selectedPoints = [hit]; }
         draggingPoint = hit;
-    } else {
-        isSelectingBox = true; hasMovedForBox = false; boxStart = {x, y}; boxEnd = {x, y};
-    }
-};
-
-canvas.ondblclick=(e)=>{
-    if(isLocked()) return;
-    const rect=canvas.getBoundingClientRect(), x=(e.clientX-rect.left)*(canvas.width/rect.width), y=e.clientY-rect.top;
-    const pIdx=keyframes.findIndex(p=>Math.hypot(toX(p.time)-x,toY(p.value)-y)<15);
-    if(pIdx>0 && pIdx<keyframes.length-1){ 
-        saveToHistory();
-        const p = keyframes[pIdx];
-        selectedPoints = selectedPoints.filter(sp => sp !== p);
-        keyframes.splice(pIdx,1); markUnsaved(); sync(); 
-    }
+    } else { isSelectingBox = true; hasMovedForBox = false; boxStart = {x, y}; boxEnd = {x, y}; }
 };
 
 window.onmousemove=(e)=>{
-    const rect=canvas.getBoundingClientRect();
-    const x=(e.clientX-rect.left)*(canvas.width/rect.width);
-    const y=e.clientY-rect.top;
-    
+    const rect=canvas.getBoundingClientRect(), x=(e.clientX-rect.left)*(canvas.width/rect.width), y=e.clientY-rect.top;
     if(isDraggingPlayhead) { manualTime = Math.max(0, Math.min(keyframes[keyframes.length-1].time, fromX(x))); return; }
-    
-    if(isSelectingBox) {
-        boxEnd = {x, y};
-        if(Math.hypot(x-boxStart.x, y-boxStart.y) > 5) hasMovedForBox = true;
-        return;
-    }
-
+    if(isSelectingBox) { boxEnd = {x, y}; if(Math.hypot(x-boxStart.x, y-boxStart.y) > 5) hasMovedForBox = true; return; }
     if(!draggingPoint || isLocked()) return;
-    
-    const dx = fromX(x) - fromX(lastMouseX);
-    const dy = fromY(y) - fromY(lastMouseY);
+    const dx = fromX(x) - fromX(lastMouseX), dy = fromY(y) - fromY(lastMouseY);
     let canMoveX = true;
     selectedPoints.forEach(p => {
-        let idx = keyframes.indexOf(p);
-        let newT = p.time + dx;
+        let idx = keyframes.indexOf(p), newT = p.time + dx;
         if(idx === 0 || idx === keyframes.length-1) canMoveX = false;
         if(idx > 0 && !selectedPoints.includes(keyframes[idx-1]) && newT <= keyframes[idx-1].time + 10) canMoveX = false;
         if(idx < keyframes.length-1 && !selectedPoints.includes(keyframes[idx+1]) && newT >= keyframes[idx+1].time - 10) canMoveX = false;
     });
-    selectedPoints.forEach(p => {
-        if(canMoveX) p.time = Math.round(p.time + dx);
-        p.value = Math.max(-100, Math.min(100, p.value + dy));
-    });
-    lastMouseX = x; lastMouseY = y;
-    keyframes.sort((a,b)=>a.time-b.time); markUnsaved(); sync();
+    selectedPoints.forEach(p => { if(canMoveX) p.time = Math.round(p.time + dx); p.value = Math.max(-100, Math.min(100, p.value + dy)); });
+    lastMouseX = x; lastMouseY = y; keyframes.sort((a,b)=>a.time-b.time); markUnsaved(); sync();
 };
 
 window.onmouseup=(e)=>{ 
-    if(isDraggingPlayhead) { 
-        if(isPaused) pausedTime = manualTime; else playStart = Date.now() - manualTime; 
-        fetch('/reset_clock_to?t=' + Math.round(manualTime)); 
-    } 
-    
+    if(isDraggingPlayhead) { if(isPaused) pausedTime = manualTime; else playStart = Date.now() - manualTime; fetch('/reset_clock_to?t=' + Math.round(manualTime)); } 
     if(isSelectingBox) {
         if(!hasMovedForBox) {
-            saveToHistory();
-            const rect=canvas.getBoundingClientRect(), x=(e.clientX-rect.left)*(canvas.width/rect.width), y=e.clientY-rect.top;
-            keyframes.push({time:Math.round(fromX(x)), value:fromY(y)});
-            keyframes.sort((a,b)=>a.time-b.time);
-            if(!e.shiftKey) selectedPoints = [];
-            markUnsaved(); sync();
+            saveToHistory(); const rect=canvas.getBoundingClientRect(), x=(e.clientX-rect.left)*(canvas.width/rect.width), y=e.clientY-rect.top;
+            keyframes.push({time:Math.round(fromX(x)), value:fromY(y)}); keyframes.sort((a,b)=>a.time-b.time);
+            if(!e.shiftKey) selectedPoints = []; markUnsaved(); sync();
         } else {
-            const xMin = Math.min(boxStart.x, boxEnd.x), xMax = Math.max(boxStart.x, boxEnd.x);
-            const yMin = Math.min(boxStart.y, boxEnd.y), yMax = Math.max(boxStart.y, boxEnd.y);
+            const xMin = Math.min(boxStart.x, boxEnd.x), xMax = Math.max(boxStart.x, boxEnd.x), yMin = Math.min(boxStart.y, boxEnd.y), yMax = Math.max(boxStart.y, boxEnd.y);
             if(!e.shiftKey) selectedPoints = [];
-            keyframes.forEach(p => {
-                const px = toX(p.time), py = toY(p.value);
-                if(px >= xMin && px <= xMax && py >= yMin && py <= yMax) { if(!selectedPoints.includes(p)) selectedPoints.push(p); }
-            });
+            keyframes.forEach(p => { const px = toX(p.time), py = toY(p.value); if(px >= xMin && px <= xMax && py >= yMin && py <= yMax) if(!selectedPoints.includes(p)) selectedPoints.push(p); });
         }
         isSelectingBox = false;
     }
@@ -393,78 +309,43 @@ window.onmouseup=(e)=>{
 window.onkeydown=(e)=>{
     if(e.ctrlKey && e.key === 'z') { e.preventDefault(); undo(); return; }
     if(e.key === "Escape" || e.key === "Esc") { selectedPoints = []; return; }
-
     if(isLocked() || selectedPoints.length === 0 || document.activeElement === editor) return;
-    
-    let changed = false;
-    const key = e.key.toLowerCase();
-    
-    if(key === "j" && selectedPoints.length >= 2) {
-        saveToHistory();
-        const sumT = selectedPoints.reduce((acc, p) => acc + p.time, 0), sumV = selectedPoints.reduce((acc, p) => acc + p.value, 0);
-        const avgT = Math.round(sumT / selectedPoints.length), avgV = sumV / selectedPoints.length;
-        const isStartSelected = selectedPoints.some(p => keyframes.indexOf(p) === 0);
-        const isEndSelected = selectedPoints.some(p => keyframes.indexOf(p) === keyframes.length - 1);
-        keyframes = keyframes.filter(p => !selectedPoints.includes(p));
-        if(isStartSelected) keyframes.push({time: 0, value: avgV});
-        if(isEndSelected) keyframes.push({time: keyframes.length > 0 ? Math.max(...keyframes.map(p=>p.time)) : 8000, value: avgV});
-        if(!isStartSelected && !isEndSelected) keyframes.push({time: avgT, value: avgV});
+    let changed = false; const key = e.key.toLowerCase();
+    if(e.key === "Delete" || e.key === "Backspace") {
+        saveToHistory(); keyframes = keyframes.filter((p, index) => (index === 0 || index === keyframes.length - 1) ? true : !selectedPoints.includes(p));
         selectedPoints = []; changed = true;
     }
-
-    if(key === "y" && selectedPoints.length >= 2) {
-        saveToHistory();
-        const avgT = Math.round(selectedPoints.reduce((acc, p) => acc + p.time, 0) / selectedPoints.length);
-        selectedPoints.forEach(p => { if(keyframes.indexOf(p) > 0 && keyframes.indexOf(p) < keyframes.length - 1) p.time = avgT; });
-        changed = true;
+    if(key === "j" && selectedPoints.length >= 2) {
+        saveToHistory(); const avgV = selectedPoints.reduce((acc, p) => acc + p.value, 0) / selectedPoints.length, isStart = selectedPoints.some(p => keyframes.indexOf(p) === 0), isEnd = selectedPoints.some(p => keyframes.indexOf(p) === keyframes.length - 1);
+        keyframes = keyframes.filter(p => !selectedPoints.includes(p));
+        if(isStart) keyframes.push({time: 0, value: avgV}); if(isEnd) keyframes.push({time: Math.max(...keyframes.map(p=>p.time)), value: avgV});
+        if(!isStart && !isEnd) keyframes.push({time: Math.round(selectedPoints.reduce((a,p)=>a+p.time,0)/selectedPoints.length), value: avgV});
+        selectedPoints = []; changed = true;
     }
-
-    if(key === "x" && selectedPoints.length >= 2) {
-        saveToHistory();
-        const avgV = selectedPoints.reduce((acc, p) => acc + p.value, 0) / selectedPoints.length;
-        selectedPoints.forEach(p => { p.value = avgV; });
-        changed = true;
-    }
-    
-    const stepT = 10, stepV = 0.5;
-    if(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) {
-        if(!e.repeat) saveToHistory();
-        selectedPoints.forEach(p => {
-            let idx = keyframes.indexOf(p);
-            if(e.key === "ArrowLeft" && idx > 0) p.time = Math.max(keyframes[idx-1].time + 1, p.time - stepT);
-            if(e.key === "ArrowRight" && idx < keyframes.length - 1) p.time = Math.min(keyframes[idx+1].time - 1, p.time + stepT);
-            if(e.key === "ArrowUp") p.value = Math.min(100, p.value + stepV);
-            if(e.key === "ArrowDown") p.value = Math.max(-100, p.value - stepV);
-        });
+    if(key === "y" || key === "x") {
+        saveToHistory(); const avg = key === "y" ? Math.round(selectedPoints.reduce((a,p)=>a+p.time,0)/selectedPoints.length) : selectedPoints.reduce((a,p)=>a+p.value,0)/selectedPoints.length;
+        selectedPoints.forEach(p => { if(key === "y") { if(keyframes.indexOf(p)>0 && keyframes.indexOf(p)<keyframes.length-1) p.time = avg; } else p.value = avg; });
         changed = true;
     }
     if(changed) { e.preventDefault(); keyframes.sort((a,b)=>a.time-b.time); markUnsaved(); sync(); }
 };
 
-async function autoLoadPreset(targetName, forceRevert=false){
+async function autoLoadPreset(targetName){
     const name = targetName || document.getElementById("presetSelect").value;
     if(!name || name === "") return;
-    if(isUnsaved && !targetName && !forceRevert && !await openModal("Wijzigingen gaan verloren. Doorgaan?")){ 
-        document.getElementById("presetSelect").value = currentOpenFile || ""; return; 
-    }
+    if(isUnsaved && !targetName && !await openModal("Wijzigingen gaan verloren. Doorgaan?")){ document.getElementById("presetSelect").value = currentOpenFile || ""; return; }
     const res = await fetch('/load?name='+name); if(!res.ok) return;
-    const data = await res.json();
-    if(data.keyframes) { keyframes = data.keyframes; document.getElementById("chaosSlider").value = data.chaos || 0; }
-    else { keyframes = data; document.getElementById("chaosSlider").value = 0; }
-    updateChaosLabel(); firstCycleDone = false; ghostPoints = []; selectedPoints = []; historyStack = [];
-    markSaved(name); await sync(true); 
-    isPaused = true; updatePlayButtonUI();
-    pausedTime = 0; playStart = Date.now();
-    fetch('/toggle_pause?p=1&reset=1');
+    const data = await res.json(); keyframes = data.keyframes || data; document.getElementById("chaosSlider").value = data.chaos || 0;
+    updateChaosLabel(); firstCycleDone = false; ghostPoints = []; selectedPoints = []; historyStack = []; markSaved(name); await sync(true); stopAndReset();
 }
 
 async function updatePresetList(targetName){
-    const res = await fetch('/list'); const list = await res.json();
-    const sel = document.getElementById("presetSelect"); sel.innerHTML = "";
-    list.forEach(f=>{ let o=document.createElement("option"); o.value=o.textContent=f; if(f === targetName) o.setAttribute('selected', 'selected'); sel.appendChild(o); });
+    const res = await fetch('/list'), list = await res.json(), sel = document.getElementById("presetSelect"); sel.innerHTML = "";
+    list.forEach(f=>{ let o=document.createElement("option"); o.value=o.textContent=f; if(f === targetName) o.selected = true; sel.appendChild(o); });
     if(!targetName) sel.selectedIndex = -1; return list;
 }
 
+// DELETE FUNCTION RESTORED
 async function deletePreset(){
     const name = document.getElementById("presetSelect").value;
     if(!name || name === "" || !await openModal("Verwijder '"+name+"' definitief?")) return;
@@ -473,14 +354,9 @@ async function deletePreset(){
     if(newList.length > 0) autoLoadPreset(newList[0]); else createNew();
 }
 
-function createNew(){ 
-    keyframes=[{time:0,value:0},{time:8000,value:0}]; selectedPoints = []; historyStack = [];
-    document.getElementById("chaosSlider").value=0; updateChaosLabel(); 
-    firstCycleDone=false; ghostPoints=[]; markSaved(""); updatePresetList(); sync(true); stopAndReset(); 
-}
-
+function createNew(){ keyframes=[{time:0,value:0},{time:8000,value:0}]; selectedPoints=[]; historyStack=[]; markSaved(""); updatePresetList(); sync(true); stopAndReset(); }
 function performSave(n){ fetch('/save?name='+n,{method:'POST',body:JSON.stringify(getExportData())}).then(()=>{markSaved(n);updatePresetList(n);}); }
-async function saveCurrent(){ if(!currentOpenFile)saveAs(); else if(await openModal("Bestand '" + currentOpenFile + "' overschrijven?")) performSave(currentOpenFile); }
+async function saveCurrent(){ if(!currentOpenFile) saveAs(); else if(await openModal("Bestand '" + currentOpenFile + "' overschrijven?")) performSave(currentOpenFile); }
 async function saveAs(){ let n=await openModal("Sla configuratie op als:", true); if(n && typeof n === 'string') performSave(n.trim().replace(/[^a-z0-9_-]/gi,'_')); }
 
 async function handleFileUpload(event){
@@ -489,47 +365,29 @@ async function handleFileUpload(event){
     reader.onload=async (ev)=>{
         try{
             const data=JSON.parse(ev.target.result); let name=file.name.replace(".json","").replace(/[^a-z0-9_-]/gi,'_');
+            const list = await (await fetch('/list')).json();
+            if(list.includes(name) && !await openModal("Bestand '"+name+"' bestaat al op de ESP. Overschrijven?")) return;
             await fetch('/save?name='+name,{method:'POST',body:JSON.stringify(data)});
-            if(data.keyframes) keyframes=data.keyframes; else keyframes=data;
-            selectedPoints = []; historyStack = []; markSaved(name); await updatePresetList(name); await sync(true); stopAndReset();
+            keyframes=data.keyframes || data; selectedPoints=[]; historyStack=[]; markSaved(name); await updatePresetList(name); await sync(true); stopAndReset();
         }catch(err){alert("Fout");}
     };
     reader.readAsText(file); event.target.value="";
 }
 
-function downloadConfig(){ 
-    const a=document.createElement('a'); 
-    a.href="data:text/json;charset=utf-8,"+encodeURIComponent(JSON.stringify(getExportData(),null,2)); 
-    a.download=(currentOpenFile || "config")+".json"; 
-    a.click(); 
-}
-
+function downloadConfig(){ const a=document.createElement('a'); a.href="data:text/json;charset=utf-8,"+encodeURIComponent(JSON.stringify(getExportData(),null,2)); a.download=(currentOpenFile || "config")+".json"; a.click(); }
 function updateDuration(){ 
-    if(!isLocked()) saveToHistory(); 
-    const oldDur = keyframes[keyframes.length-1].time; const newDur = document.getElementById("totalTime").value * 1000;
-    if(oldDur <= 0 || newDur <= 0) return;
-    const factor = newDur / oldDur;
-    keyframes.forEach(p => { p.time = Math.round(p.time * factor); });
-    if(isPaused) pausedTime *= factor;
-    markUnsaved(); sync(); 
+    if(!isLocked()) saveToHistory(); const oldDur = keyframes[keyframes.length-1].time, newDur = document.getElementById("totalTime").value * 1000;
+    const factor = newDur / oldDur; keyframes.forEach(p => { p.time = Math.round(p.time * factor); }); markUnsaved(); sync(); 
 }
-
-function applyJson(){ if(isLocked()) return; try{const data=JSON.parse(editor.value); if(data.keyframes) keyframes=data.keyframes; else keyframes=data; markUnsaved(); sync();}catch(e){} }
+function applyJson(){ if(isLocked()) return; try{const data=JSON.parse(editor.value); keyframes=data.keyframes || data; markUnsaved(); sync();}catch(e){} }
 
 async function init(){
     const [dataRes, nameRes, listRes, pauseRes] = await Promise.all([ fetch('/get_active'), fetch('/get_active_name'), fetch('/list'), fetch('/get_pause_state') ]);
-    const data = await dataRes.json(); const activeName = await nameRes.text(); const list = await listRes.json();
-    const pauseState = await pauseRes.text();
-    isPaused = (pauseState == "1");
-    updatePlayButtonUI();
-    
-    if(data.keyframes) { keyframes = data.keyframes; document.getElementById("chaosSlider").value = data.chaos || 0; }
-    else { keyframes = data; }
-    updateChaosLabel();
-    const validatedName = (list.includes(activeName)) ? activeName : "";
-    await updatePresetList(validatedName); markSaved(validatedName);
-    const tRes = await fetch('/get_time'); const t = await tRes.text();
-    playStart = Date.now() - parseInt(t); sync(true); draw();
+    const data = await dataRes.json(), activeName = await nameRes.text(), list = await listRes.json();
+    isPaused = (await pauseRes.text() == "1"); updatePlayButtonUI();
+    keyframes = data.keyframes || data; document.getElementById("chaosSlider").value = data.chaos || 0; updateChaosLabel();
+    const validatedName = list.includes(activeName) ? activeName : ""; await updatePresetList(validatedName); markSaved(validatedName);
+    playStart = Date.now() - parseInt(await (await fetch('/get_time')).text()); sync(true); draw();
 }
 init();
 </script>
@@ -537,92 +395,55 @@ init();
 </html>
 )rawliteral";
 
-// --- C++ BACKEND ---
 void loadFromJSON(String json) {
   DynamicJsonDocument doc(4096);
   if (deserializeJson(doc, json)) return;
-  JsonArray arr;
-  if (doc.is<JsonObject>() && doc.containsKey("keyframes")) arr = doc["keyframes"].as<JsonArray>();
-  else arr = doc.as<JsonArray>();
-  envelopeSize = arr.size();
-  for (int i = 0; i < (envelopeSize < 50 ? envelopeSize : 50); i++) {
-    envelope[i].time = arr[i]["time"];
-    envelope[i].value = (float)arr[i]["value"];
-  }
+  JsonArray arr = (doc.is<JsonObject>() && doc.containsKey("keyframes")) ? doc["keyframes"].as<JsonArray>() : doc.as<JsonArray>();
+  envelopeSize = min((int)arr.size(), 50);
+  for (int i = 0; i < envelopeSize; i++) { envelope[i].time = arr[i]["time"]; envelope[i].value = (float)arr[i]["value"]; }
   loopDuration = (envelopeSize > 1) ? envelope[envelopeSize - 1].time : 8000;
   currentSegment = 0;
 }
 
 void setup() {
-  Serial.begin(115200);
-  for (int i = 0; i < 4; i++) pinMode(motorPins[i], OUTPUT);
-  LittleFS.begin(true);
-  
-  // Laad laatste configuratie
-  if (LittleFS.exists("/active.json")) {
-    loadFromJSON(LittleFS.open("/active.json", "r").readString());
-  }
-  
-  // Start de motor direct na opstarten
-  isPaused = false;
-  startTime = millis();
-
+  Serial.begin(115200); for (int i = 0; i < 4; i++) pinMode(motorPins[i], OUTPUT); LittleFS.begin(true);
+  if (LittleFS.exists("/active.json")) loadFromJSON(LittleFS.open("/active.json", "r").readString());
+  isPaused = false; startTime = millis();
   WiFi.mode(WIFI_AP_STA); WiFi.softAP(ap_ssid, ap_pass); WiFi.begin(ssid_home, pass_home); MDNS.begin(mdns_name);
   server.on("/", [](){ server.send(200, "text/html", htmlPage); });
   server.on("/get_time", [](){ server.send(200, "text/plain", String((millis() - startTime) % loopDuration)); });
   server.on("/get_pause_state", [](){ server.send(200, "text/plain", isPaused ? "1" : "0"); });
-  server.on("/toggle_pause", [](){ 
-    if(server.hasArg("p")) isPaused = (server.arg("p") == "1");
-    if(server.hasArg("reset")) { startTime = millis(); currentSegment = 0; }
-    server.send(200); 
-  });
-  server.on("/set_live", HTTP_POST, [](){
-    if(server.hasArg("plain")) { loadFromJSON(server.arg("plain")); File f = LittleFS.open("/active.json", "w"); f.print(server.arg("plain")); f.close(); }
-    server.send(200);
-  });
+  server.on("/toggle_pause", [](){ if(server.hasArg("p")) isPaused = (server.arg("p") == "1"); if(server.hasArg("reset")) { startTime = millis(); currentSegment = 0; } server.send(200); });
+  server.on("/set_live", HTTP_POST, [](){ if(server.hasArg("plain")) { loadFromJSON(server.arg("plain")); File f = LittleFS.open("/active.json", "w"); f.print(server.arg("plain")); f.close(); } server.send(200); });
   server.on("/save", HTTP_POST, [](){
-    String name = server.arg("name"); String data = server.arg("plain");
+    String name = server.arg("name"), data = server.arg("plain");
     File f1 = LittleFS.open("/" + name + ".json", "w"); f1.print(data); f1.close();
     File f2 = LittleFS.open("/active.json", "w"); f2.print(data); f2.close();
-    File f3 = LittleFS.open("/active_name.txt", "w"); f3.print(name); f3.close();
-    server.send(200);
+    File f3 = LittleFS.open("/active_name.txt", "w"); f3.print(name); f3.close(); server.send(200);
   });
-  server.on("/load", HTTP_GET, [](){
-    String name = server.arg("name"); File f = LittleFS.open("/" + name + ".json", "r");
-    if(f){ server.send(200, "application/json", f.readString()); f.close(); } else server.send(404);
-  });
+  server.on("/load", HTTP_GET, [](){ String name = server.arg("name"); File f = LittleFS.open("/" + name + ".json", "r"); if(f){ server.send(200, "application/json", f.readString()); f.close(); } else server.send(404); });
+  
+  // DELETE ROUTE RESTORED
   server.on("/delete", HTTP_DELETE, [](){ 
     String name = server.arg("name"); 
     if(LittleFS.exists("/"+name+".json")) LittleFS.remove("/"+name+".json");
-    if (LittleFS.exists("/active_name.txt")) {
-        File f = LittleFS.open("/active_name.txt", "r");
-        String current = f.readString(); f.close();
-        if(current == name) LittleFS.remove("/active_name.txt");
-    }
     server.send(200); 
   });
+
   server.on("/list", HTTP_GET, [](){
     String list = "["; File root = LittleFS.open("/"); File file = root.openNextFile();
     while (file) { String n = file.name(); if (n.endsWith(".json") && n != "active.json") { if (list != "[") list += ","; list += "\"" + n.substring(0, n.length() - 5) + "\""; } file = root.openNextFile(); }
     list += "]"; server.send(200, "application/json", list);
   });
-  server.on("/get_active", HTTP_GET, [](){
-    File f = LittleFS.open("/active.json", "r"); if(f) { server.send(200, "application/json", f.readString()); f.close(); }
-    else server.send(200, "application/json", "{\"chaos\":0,\"keyframes\":[{\"time\":0,\"value\":0},{\"time\":8000,\"value\":0}]}");
-  });
-  server.on("/get_active_name", HTTP_GET, [](){
-    if (LittleFS.exists("/active_name.txt")) { File f = LittleFS.open("/active_name.txt", "r"); String n = f.readString(); f.close(); server.send(200, "text/plain", n); }
-    else server.send(200, "text/plain", "Geen");
-  });
+  server.on("/get_active", HTTP_GET, [](){ File f = LittleFS.open("/active.json", "r"); if(f) { server.send(200, "application/json", f.readString()); f.close(); } else server.send(200, "application/json", "[]"); });
+  server.on("/get_active_name", HTTP_GET, [](){ if (LittleFS.exists("/active_name.txt")) { File f = LittleFS.open("/active_name.txt", "r"); String n = f.readString(); f.close(); server.send(200, "text/plain", n); } else server.send(200, "text/plain", ""); });
   server.on("/reset_clock_to", [](){ if(server.hasArg("t")) { startTime = millis() - server.arg("t").toInt(); currentSegment = 0; } server.send(200); });
   server.begin();
 }
 
 void loop() {
-  server.handleClient();
-  if (isPaused) { for (int i = 0; i < 4; i++) digitalWrite(motorPins[i], LOW); return; }
-  unsigned long t = (millis() - startTime) % loopDuration;
-  if (t < envelope[currentSegment].time) currentSegment = 0;
+  server.handleClient(); if (isPaused) { for (int i = 0; i < 4; i++) digitalWrite(motorPins[i], LOW); return; }
+  unsigned long t = (millis() - startTime) % loopDuration; if (t < envelope[currentSegment].time) currentSegment = 0;
   while (currentSegment < envelopeSize - 1 && t > envelope[currentSegment + 1].time) currentSegment++;
   float f = (float)(t - envelope[currentSegment].time) / (envelope[currentSegment + 1].time - envelope[currentSegment].time);
   float currentVal = envelope[currentSegment].value + f * (envelope[currentSegment + 1].value - envelope[currentSegment].value);
@@ -630,9 +451,7 @@ void loop() {
   if (speedFactor > 0.02) {
     unsigned long stepInterval = 1000000.0 / (speedFactor * MAX_STEPS_PER_SEC);
     if (micros() - lastStepMicros >= stepInterval) {
-      lastStepMicros = micros();
-      if (currentVal > 0) { stepIndex = (stepIndex + 1) % 8; motorPosition++; }
-      else { stepIndex = (stepIndex + 7) % 8; motorPosition--; }
+      lastStepMicros = micros(); if (currentVal > 0) stepIndex = (stepIndex + 1) % 8; else stepIndex = (stepIndex + 7) % 8;
       for (int i = 0; i < 4; i++) digitalWrite(motorPins[i], steps[stepIndex][i]);
     }
   } else { for (int i = 0; i < 4; i++) digitalWrite(motorPins[i], LOW); }
