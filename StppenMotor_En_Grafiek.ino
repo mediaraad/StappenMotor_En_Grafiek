@@ -29,7 +29,7 @@ int envelopeSize = 2;
 unsigned long startTime = 0;
 unsigned long loopDuration = 8000;
 int currentSegment = 0; 
-bool isPaused = false;
+bool isPaused = true; 
 
 const char* htmlPage PROGMEM = R"rawliteral(
 <!DOCTYPE html>
@@ -37,11 +37,11 @@ const char* htmlPage PROGMEM = R"rawliteral(
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Stepper Pro v21.6 - Fixed New</title>
+<title>Stepper Pro v21.12 - Menu Fix</title>
 <style>
 body{background:#121212;color:#eee;font-family:sans-serif;text-align:center;margin:0;padding:20px;}
 #canvasContainer{width:100%; max-width:1200px; margin:0 auto; position:relative;}
-canvas{background:#1e1e1e;border:2px solid #444;cursor:pointer;touch-action:none;display:block;width:100%;border-radius:8px;box-shadow: 0 4px 15px rgba(0,0,0,0.5);}
+canvas{background:#1e1e1e;border:2px solid #444;cursor:pointer;touch-action:none;display:block;width:100%;border-radius:8px;box-shadow: 0 4px 15px rgba(0,0,0,0.5);outline:none;}
 .controls{background:#2a2a2a;padding:15px;border-radius:8px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;margin:0 auto 10px auto;border:1px solid #444;max-width:1200px;box-sizing:border-box;box-shadow: 0 2px 10px rgba(0,0,0,0.3);}
 .control-row{display:flex; align-items:center; justify-content:center; gap:10px; flex-wrap:wrap;}
 input,button,select{height:42px; padding:0 10px; border-radius:4px;border:none;background:#444;color:white;outline:none;font-size:14px;transition:0.2s;}
@@ -61,6 +61,8 @@ textarea{width:100%; max-width:1200px; height:120px; background:#1e1e1e; color:#
 .modal-content{background:#2a2a2a; margin:15% auto; padding:30px; border:1px solid #00bfff; width:300px; border-radius:16px;}
 #modalInput{width:100%; margin-bottom:20px; text-align:center; display:none; background:#1e1e1e; border:1px solid #444; color:white; height:35px;}
 .modal-btns{display:flex; justify-content:center; gap:15px;}
+.help-text{font-size:11px; color:#888; margin-top:5px;}
+.locked-info {color: #ff4444; font-size: 12px; font-weight: bold; margin-bottom: 5px; height: 15px;}
 </style>
 </head>
 <body>
@@ -85,16 +87,18 @@ textarea{width:100%; max-width:1200px; height:120px; background:#1e1e1e; color:#
                 <span id="chaosVal" style="font-size:12px;width:30px;">0%</span>
             </div>
             <span style="border-left:1px solid #444;height:30px;"></span>
-            <button id="playBtn" onclick="togglePause()" class="btn-play">⏸</button>
+            <button id="playBtn" onclick="togglePause()" class="btn-play">▶</button>
             <button onclick="stopAndReset()" class="btn-stop">■</button>
             <span style="border-left:1px solid #444;height:30px;"></span>
             <label>Duur (sec):</label>
             <input type="number" id="totalTime" value="8" min="1" style="width:55px;" onchange="updateDuration()">
         </div>
+        <div class="help-text">Edit alleen in beginstand (■) | X: VERTICAAL (Tijd gelijk) | Y: HORIZONTAAL (Waarde gelijk) | Ctrl+Z: Undo</div>
     </div>
+    <div class="locked-info" id="lockedStatus"></div>
     <div class="unsaved-container"><span id="unsavedWarning" class="unsaved-text">⚠️ NIET OPGESLAGEN</span></div>
     <div id="canvasContainer">
-        <canvas id="envelopeCanvas" height="400"></canvas>
+        <canvas id="envelopeCanvas" height="400" tabindex="1"></canvas>
     </div>
     <textarea id="jsonEditor" spellcheck="false" oninput="applyJson()"></textarea>
 
@@ -112,9 +116,14 @@ textarea{width:100%; max-width:1200px; height:120px; background:#1e1e1e; color:#
 <script>
 const canvas=document.getElementById("envelopeCanvas"), ctx=canvas.getContext("2d"), editor=document.getElementById("jsonEditor");
 let keyframes=[{time:0,value:0},{time:8000,value:0}], originalKeyframes=[];
-let selected=null, playStart=Date.now(), isUnsaved=false, currentOpenFile="";
+let selectedPoints=[];
+let draggingPoint=null, lastMouseX=0, lastMouseY=0;
+let historyStack = [];
+let playStart=Date.now(), isUnsaved=false, currentOpenFile="";
 let isDraggingPlayhead = false, manualTime = 0, ghostPoints = [], lastElapsed = 0, firstCycleDone = false;
-let pausedTime = 0, isPaused = false;
+let pausedTime = 0, isPaused = true; 
+
+function isLocked() { return !isPaused || pausedTime !== 0; }
 
 function resizeCanvas() {
     const container = document.getElementById("canvasContainer");
@@ -122,6 +131,21 @@ function resizeCanvas() {
 }
 window.addEventListener('resize', resizeCanvas);
 resizeCanvas();
+
+function saveToHistory() {
+    historyStack.push(JSON.stringify(keyframes));
+    if(historyStack.length > 30) historyStack.shift();
+}
+
+function undo() {
+    if(isLocked()) return;
+    if(historyStack.length > 0) {
+        keyframes = JSON.parse(historyStack.pop());
+        selectedPoints = [];
+        markUnsaved();
+        sync();
+    }
+}
 
 let modalResolve;
 function openModal(text, showInput=false){ 
@@ -156,11 +180,7 @@ async function stopAndReset() {
     document.getElementById("playBtn").innerText = "▶";
     pausedTime = 0;
     playStart = Date.now();
-    if(currentOpenFile) {
-        await autoLoadPreset(currentOpenFile, true);
-    } else {
-        fetch('/toggle_pause?p=1&reset=1');
-    }
+    fetch('/toggle_pause?p=1&reset=1');
 }
 
 function updateChaosLabel(){ document.getElementById("chaosVal").innerText = document.getElementById("chaosSlider").value + "%"; }
@@ -173,7 +193,6 @@ function generateGhost() {
     const chaos = document.getElementById("chaosSlider").value / 100;
     if(chaos <= 0) { ghostPoints = []; return; }
     const source = originalKeyframes.length > 0 ? originalKeyframes : keyframes;
-    
     ghostPoints = source.map((p, i) => {
         if (i === 0 || i === source.length - 1) return { ...p };
         const prevT = source[i-1].time;
@@ -196,29 +215,19 @@ function markSaved(name){
     let exists = false;
     for(let i=0; i<sel.options.length; i++) {
         if(sel.options[i].value === name) {
-            exists = true;
-            sel.selectedIndex = i;
-            sel.options[i].setAttribute('selected', 'selected');
-        } else {
-            sel.options[i].removeAttribute('selected');
-        }
+            exists = true; sel.selectedIndex = i; sel.options[i].setAttribute('selected', 'selected');
+        } else sel.options[i].removeAttribute('selected');
     }
     if(!name || name === "") sel.selectedIndex = -1;
-
-    if(exists && name !== "") {
-        currentOpenFile = name;
-        document.getElementById("currentFileDisplay").innerText = " - " + name;
-    } else {
-        currentOpenFile = "";
-        document.getElementById("currentFileDisplay").innerText = "";
-    }
+    if(exists && name !== "") { currentOpenFile = name; document.getElementById("currentFileDisplay").innerText = " - " + name; }
+    else if (name !== "") { currentOpenFile = name; document.getElementById("currentFileDisplay").innerText = " - " + name; }
+    else { currentOpenFile = ""; document.getElementById("currentFileDisplay").innerText = ""; }
     originalKeyframes = JSON.parse(JSON.stringify(keyframes));
 }
 
 function getExportData() { 
     const cleanKeyframes = (originalKeyframes.length > 0 ? originalKeyframes : keyframes).map(kp => ({
-        time: Math.round(kp.time),
-        value: Math.round(kp.value * 100) / 100
+        time: Math.round(kp.time), value: Math.round(kp.value * 100) / 100
     }));
     return { chaos: parseInt(document.getElementById("chaosSlider").value), keyframes: cleanKeyframes }; 
 }
@@ -233,6 +242,10 @@ function sync(skipGhost=false){
 
 function draw(){
     ctx.clearRect(0,0,canvas.width,canvas.height);
+    const locked = isLocked();
+    canvas.style.cursor = locked ? "not-allowed" : "pointer";
+    document.getElementById("lockedStatus").innerText = locked ? "LOCKED: Druk eerst op ■ om te editen" : "";
+
     ctx.strokeStyle="#333"; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(0,canvas.height/2); ctx.lineTo(canvas.width,canvas.height/2); ctx.stroke();
     let dur=keyframes[keyframes.length-1].time;
     let elapsed = isDraggingPlayhead ? manualTime : (isPaused ? pausedTime : (Date.now()-playStart)%dur);
@@ -243,8 +256,7 @@ function draw(){
             const data = { chaos: parseInt(document.getElementById("chaosSlider").value), keyframes: keyframes };
             fetch('/set_live',{method:'POST',body:JSON.stringify(data)}); 
         }
-        firstCycleDone = true; 
-        generateGhost();
+        firstCycleDone = true; generateGhost();
     }
     lastElapsed = elapsed;
     if (firstCycleDone && ghostPoints.length > 0) {
@@ -255,7 +267,13 @@ function draw(){
     ctx.strokeStyle="#00bfff"; ctx.lineWidth=3; ctx.beginPath();
     keyframes.forEach((p,i)=> i?ctx.lineTo(toX(p.time),toY(p.value)):ctx.moveTo(toX(p.time),toY(p.value)));
     ctx.stroke();
-    ctx.fillStyle="#ff9900"; keyframes.forEach(p=>{ctx.beginPath();ctx.arc(toX(p.time),toY(p.value),6,0,7);ctx.fill();});
+    
+    keyframes.forEach(p => {
+        const isSelected = selectedPoints.includes(p);
+        ctx.beginPath(); ctx.arc(toX(p.time), toY(p.value), 6, 0, 7);
+        ctx.fillStyle = isSelected ? "#ffffff" : "#ff9900"; ctx.fill();
+        if(isSelected) { ctx.strokeStyle = "#00bfff"; ctx.lineWidth = 2; ctx.stroke(); }
+    });
     ctx.strokeStyle="red"; ctx.lineWidth=3; ctx.beginPath(); ctx.moveTo(toX(elapsed),0); ctx.lineTo(toX(elapsed),canvas.height); ctx.stroke();
     requestAnimationFrame(draw);
 }
@@ -264,124 +282,183 @@ canvas.onmousedown=(e)=>{
     const rect=canvas.getBoundingClientRect(), x=(e.clientX-rect.left)*(canvas.width/rect.width), y=e.clientY-rect.top;
     let dur=keyframes[keyframes.length-1].time;
     let currentPos = isPaused ? pausedTime : (Date.now()-playStart)%dur;
-    if(Math.abs(x - toX(currentPos)) < 30) { 
-        isDraggingPlayhead = true; 
-        manualTime = currentPos; 
-        return; 
+    if(Math.abs(x - toX(currentPos)) < 30) { isDraggingPlayhead = true; manualTime = currentPos; return; }
+    
+    if(isLocked()) return; 
+
+    lastMouseX = x; lastMouseY = y;
+    let hit = keyframes.find(p=>Math.hypot(toX(p.time)-x,toY(p.value)-y)<15);
+    if(hit) {
+        saveToHistory();
+        if(e.shiftKey) {
+            if(selectedPoints.includes(hit)) selectedPoints = selectedPoints.filter(p => p !== hit);
+            else selectedPoints.push(hit);
+        } else { if(!selectedPoints.includes(hit)) selectedPoints = [hit]; }
+        draggingPoint = hit;
+    } else {
+        saveToHistory(); 
+        selectedPoints = [];
+        const newPoint = {time:Math.round(fromX(x)),value:fromY(y)};
+        keyframes.push(newPoint); keyframes.sort((a,b)=>a.time-b.time); 
+        markUnsaved(); sync();
     }
-    selected=keyframes.find(p=>Math.hypot(toX(p.time)-x,toY(p.value)-y)<15);
-    if(!selected){ keyframes.push({time:Math.round(fromX(x)),value:fromY(y)}); keyframes.sort((a,b)=>a.time-b.time); markUnsaved(); sync(); }
 };
 
 canvas.ondblclick=(e)=>{
+    if(isLocked()) return;
     const rect=canvas.getBoundingClientRect(), x=(e.clientX-rect.left)*(canvas.width/rect.width), y=e.clientY-rect.top;
     const pIdx=keyframes.findIndex(p=>Math.hypot(toX(p.time)-x,toY(p.value)-y)<15);
-    if(pIdx>0 && pIdx<keyframes.length-1){ keyframes.splice(pIdx,1); markUnsaved(); sync(); }
+    if(pIdx>0 && pIdx<keyframes.length-1){ 
+        saveToHistory();
+        const p = keyframes[pIdx];
+        selectedPoints = selectedPoints.filter(sp => sp !== p);
+        keyframes.splice(pIdx,1); markUnsaved(); sync(); 
+    }
 };
 
 window.onmousemove=(e)=>{
     const rect=canvas.getBoundingClientRect();
-    if(isDraggingPlayhead) { manualTime = Math.max(0, Math.min(keyframes[keyframes.length-1].time, fromX((e.clientX-rect.left)*(canvas.width/rect.width)))); return; }
-    if(!selected) return;
-    if(selected!==keyframes[0] && selected!==keyframes[keyframes.length-1]) {
-        let t = fromX((e.clientX-rect.left)*(canvas.width/rect.width));
-        let idx = keyframes.indexOf(selected);
-        selected.time = Math.round(Math.max(keyframes[idx-1].time + 10, Math.min(keyframes[idx+1].time - 10, t)));
-    }
-    selected.value=Math.max(-100,Math.min(100,fromY(e.clientY-rect.top)));
+    const x=(e.clientX-rect.left)*(canvas.width/rect.width);
+    const y=e.clientY-rect.top;
+    if(isDraggingPlayhead) { manualTime = Math.max(0, Math.min(keyframes[keyframes.length-1].time, fromX(x))); return; }
+    if(!draggingPoint || isLocked()) return;
+    const dx = fromX(x) - fromX(lastMouseX);
+    const dy = fromY(y) - fromY(lastMouseY);
+    let canMoveX = true;
+    selectedPoints.forEach(p => {
+        let idx = keyframes.indexOf(p);
+        let newT = p.time + dx;
+        if(idx === 0 || idx === keyframes.length-1) canMoveX = false;
+        if(idx > 0 && !selectedPoints.includes(keyframes[idx-1]) && newT <= keyframes[idx-1].time + 10) canMoveX = false;
+        if(idx < keyframes.length-1 && !selectedPoints.includes(keyframes[idx+1]) && newT >= keyframes[idx+1].time - 10) canMoveX = false;
+    });
+    selectedPoints.forEach(p => {
+        if(canMoveX) p.time = Math.round(p.time + dx);
+        p.value = Math.max(-100, Math.min(100, p.value + dy));
+    });
+    lastMouseX = x; lastMouseY = y;
     keyframes.sort((a,b)=>a.time-b.time); markUnsaved(); sync();
 };
 
 window.onmouseup=()=>{ 
     if(isDraggingPlayhead) { 
-        if(isPaused) pausedTime = manualTime;
-        else playStart = Date.now() - manualTime; 
+        if(isPaused) pausedTime = manualTime; else playStart = Date.now() - manualTime; 
         fetch('/reset_clock_to?t=' + Math.round(manualTime)); 
     } 
-    selected=null; isDraggingPlayhead = false; 
+    draggingPoint=null; isDraggingPlayhead = false; 
+};
+
+window.onkeydown=(e)=>{
+    if(e.ctrlKey && e.key === 'z') { e.preventDefault(); undo(); return; }
+    if(isLocked() || selectedPoints.length === 0 || document.activeElement === editor) return;
+    
+    let changed = false;
+    const key = e.key.toLowerCase();
+    
+    if(key === "y" && selectedPoints.length === 2) {
+        let avgT = Math.round((selectedPoints[0].time + selectedPoints[1].time) / 2);
+        if(Math.abs(selectedPoints[0].value - selectedPoints[1].value) < 0.1) return;
+        saveToHistory();
+        selectedPoints.forEach(p => {
+            let idx = keyframes.indexOf(p);
+            if(idx > 0 && idx < keyframes.length - 1) { p.time = avgT; }
+        });
+        changed = true;
+    }
+
+    if(key === "x" && selectedPoints.length === 2) {
+        let avgV = (selectedPoints[0].value + selectedPoints[1].value) / 2;
+        if(Math.abs(selectedPoints[0].time - selectedPoints[1].time) < 1) return;
+        saveToHistory();
+        selectedPoints.forEach(p => { p.value = avgV; });
+        changed = true;
+    }
+    
+    const stepT = 10, stepV = 0.5;
+    if(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) {
+        if(!e.repeat) saveToHistory();
+        selectedPoints.forEach(p => {
+            let idx = keyframes.indexOf(p);
+            if(e.key === "ArrowLeft" && idx > 0) p.time = Math.max(keyframes[idx-1].time + 1, p.time - stepT);
+            if(e.key === "ArrowRight" && idx < keyframes.length - 1) p.time = Math.min(keyframes[idx+1].time - 1, p.time + stepT);
+            if(e.key === "ArrowUp") p.value = Math.min(100, p.value + stepV);
+            if(e.key === "ArrowDown") p.value = Math.max(-100, p.value - stepV);
+        });
+        changed = true;
+    }
+    if(changed) { e.preventDefault(); keyframes.sort((a,b)=>a.time-b.time); markUnsaved(); sync(); }
 };
 
 async function autoLoadPreset(targetName, forceRevert=false){
     const name = targetName || document.getElementById("presetSelect").value;
     if(!name || name === "") return;
     if(isUnsaved && !targetName && !forceRevert && !await openModal("Wijzigingen gaan verloren. Doorgaan?")){ 
-        document.getElementById("presetSelect").value = currentOpenFile || ""; 
-        return; 
+        document.getElementById("presetSelect").value = currentOpenFile || ""; return; 
     }
-    const res = await fetch('/load?name='+name); 
-    if(!res.ok) return;
+    const res = await fetch('/load?name='+name); if(!res.ok) return;
     const data = await res.json();
     if(data.keyframes) { keyframes = data.keyframes; document.getElementById("chaosSlider").value = data.chaos || 0; }
     else { keyframes = data; document.getElementById("chaosSlider").value = 0; }
-    updateChaosLabel(); firstCycleDone = false; ghostPoints = [];
+    updateChaosLabel(); firstCycleDone = false; ghostPoints = []; selectedPoints = []; historyStack = [];
     markSaved(name); await sync(true); 
-    
-    if(forceRevert) {
-        isPaused = true;
-        document.getElementById("playBtn").innerText = "▶";
-        pausedTime = 0;
-        playStart = Date.now();
-        fetch('/toggle_pause?p=1&reset=1');
-    }
+
+    // FIX: Bij wissel altijd pauzeren aan het begin (tijd 0)
+    isPaused = true;
+    document.getElementById("playBtn").innerText = "▶";
+    pausedTime = 0;
+    playStart = Date.now();
+    fetch('/toggle_pause?p=1&reset=1');
 }
 
 async function updatePresetList(targetName){
-    const res = await fetch('/list');
-    const list = await res.json();
+    const res = await fetch('/list'); const list = await res.json();
     const sel = document.getElementById("presetSelect"); sel.innerHTML = "";
-    list.forEach(f=>{ 
-        let o=document.createElement("option"); 
-        o.value=o.textContent=f; 
-        if(f === targetName) o.setAttribute('selected', 'selected');
-        sel.appendChild(o); 
-    });
-    if(!targetName) sel.selectedIndex = -1;
-    return list;
+    list.forEach(f=>{ let o=document.createElement("option"); o.value=o.textContent=f; if(f === targetName) o.setAttribute('selected', 'selected'); sel.appendChild(o); });
+    if(!targetName) sel.selectedIndex = -1; return list;
 }
 
 async function deletePreset(){
     const name = document.getElementById("presetSelect").value;
     if(!name || name === "" || !await openModal("Verwijder '"+name+"' definitief?")) return;
     await fetch('/delete?name='+name, {method:'DELETE'});
-    currentOpenFile = ""; 
-    const newList = await updatePresetList();
+    currentOpenFile = ""; const newList = await updatePresetList();
     if(newList.length > 0) autoLoadPreset(newList[0]); else createNew();
 }
 
 function createNew(){ 
-    keyframes=[{time:0,value:0},{time:8000,value:0}]; 
-    document.getElementById("chaosSlider").value=0; 
-    updateChaosLabel(); 
-    firstCycleDone=false; 
-    ghostPoints=[]; 
-    markSaved(""); 
-    updatePresetList(); 
-    sync(true); 
-    stopAndReset(); 
+    keyframes=[{time:0,value:0},{time:8000,value:0}]; selectedPoints = []; historyStack = [];
+    document.getElementById("chaosSlider").value=0; updateChaosLabel(); 
+    firstCycleDone=false; ghostPoints=[]; markSaved(""); updatePresetList(); sync(true); stopAndReset(); 
 }
 
 function performSave(n){ fetch('/save?name='+n,{method:'POST',body:JSON.stringify(getExportData())}).then(()=>{markSaved(n);updatePresetList(n);}); }
 async function saveCurrent(){ if(!currentOpenFile)saveAs(); else if(await openModal("Bestand '" + currentOpenFile + "' overschrijven?")) performSave(currentOpenFile); }
 async function saveAs(){ let n=await openModal("Sla configuratie op als:", true); if(n && typeof n === 'string') performSave(n.trim().replace(/[^a-z0-9_-]/gi,'_')); }
-async function handleFileUpload(e){
-    const file=e.target.files[0]; if(!file) return;
+
+async function handleFileUpload(event){
+    const file=event.target.files[0]; if(!file) return;
     const reader=new FileReader();
     reader.onload=async (ev)=>{
         try{
-            const data=JSON.parse(ev.target.result);
-            let name=file.name.replace(".json","").replace(/[^a-z0-9_-]/gi,'_');
+            const data=JSON.parse(ev.target.result); let name=file.name.replace(".json","").replace(/[^a-z0-9_-]/gi,'_');
             await fetch('/save?name='+name,{method:'POST',body:JSON.stringify(data)});
             if(data.keyframes) keyframes=data.keyframes; else keyframes=data;
-            markSaved(name); await updatePresetList(name); await sync(true); stopAndReset();
+            selectedPoints = []; historyStack = []; markSaved(name); await updatePresetList(name); await sync(true); stopAndReset();
         }catch(err){alert("Fout");}
     };
-    reader.readAsText(file); e.target.value="";
+    reader.readAsText(file); event.target.value="";
 }
-function downloadConfig(){ const a=document.createElement('a'); a.href="data:text/json;charset=utf-8,"+encodeURIComponent(JSON.stringify(getExportData(),null,2)); a.download=(currentOpenFile||"config")+".json"; a.click(); }
+
+function downloadConfig(){ 
+    const a=document.createElement('a'); 
+    a.href="data:text/json;charset=utf-8,"+encodeURIComponent(JSON.stringify(getExportData(),null,2)); 
+    a.download=(currentOpenFile || "config")+".json"; 
+    a.click(); 
+}
 
 function updateDuration(){ 
-    const oldDur = keyframes[keyframes.length-1].time;
-    const newDur = document.getElementById("totalTime").value * 1000;
+    if(!isLocked()) saveToHistory(); 
+    const oldDur = keyframes[keyframes.length-1].time; const newDur = document.getElementById("totalTime").value * 1000;
     if(oldDur <= 0 || newDur <= 0) return;
     const factor = newDur / oldDur;
     keyframes.forEach(p => { p.time = Math.round(p.time * factor); });
@@ -389,24 +466,18 @@ function updateDuration(){
     markUnsaved(); sync(); 
 }
 
-function applyJson(){ try{const data=JSON.parse(editor.value); if(data.keyframes) keyframes=data.keyframes; else keyframes=data; markUnsaved(); sync();}catch(e){} }
+function applyJson(){ if(isLocked()) return; try{const data=JSON.parse(editor.value); if(data.keyframes) keyframes=data.keyframes; else keyframes=data; markUnsaved(); sync();}catch(e){} }
 
 async function init(){
     const [dataRes, nameRes, listRes] = await Promise.all([ fetch('/get_active'), fetch('/get_active_name'), fetch('/list') ]);
-    const data = await dataRes.json();
-    const activeName = await nameRes.text();
-    const list = await listRes.json();
+    const data = await dataRes.json(); const activeName = await nameRes.text(); const list = await listRes.json();
     if(data.keyframes) { keyframes = data.keyframes; document.getElementById("chaosSlider").value = data.chaos || 0; }
     else { keyframes = data; }
     updateChaosLabel();
     const validatedName = (list.includes(activeName)) ? activeName : "";
-    await updatePresetList(validatedName);
-    markSaved(validatedName);
-    const tRes = await fetch('/get_time');
-    const t = await tRes.text();
-    playStart = Date.now() - parseInt(t);
-    sync(true);
-    draw();
+    await updatePresetList(validatedName); markSaved(validatedName);
+    const tRes = await fetch('/get_time'); const t = await tRes.text();
+    playStart = Date.now() - parseInt(t); sync(true); draw();
 }
 init();
 </script>
@@ -487,21 +558,13 @@ void setup() {
 
 void loop() {
   server.handleClient();
-  
-  if (isPaused) {
-    for (int i = 0; i < 4; i++) digitalWrite(motorPins[i], LOW);
-    return;
-  }
-
+  if (isPaused) { for (int i = 0; i < 4; i++) digitalWrite(motorPins[i], LOW); return; }
   unsigned long t = (millis() - startTime) % loopDuration;
   if (t < envelope[currentSegment].time) currentSegment = 0;
-  while (currentSegment < envelopeSize - 1 && t > envelope[currentSegment + 1].time) {
-    currentSegment++;
-  }
+  while (currentSegment < envelopeSize - 1 && t > envelope[currentSegment + 1].time) currentSegment++;
   float f = (float)(t - envelope[currentSegment].time) / (envelope[currentSegment + 1].time - envelope[currentSegment].time);
   float currentVal = envelope[currentSegment].value + f * (envelope[currentSegment + 1].value - envelope[currentSegment].value);
   float speedFactor = abs(currentVal) / 100.0;
-  
   if (speedFactor > 0.02) {
     unsigned long stepInterval = 1000000.0 / (speedFactor * MAX_STEPS_PER_SEC);
     if (micros() - lastStepMicros >= stepInterval) {
