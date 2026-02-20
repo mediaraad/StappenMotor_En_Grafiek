@@ -5,7 +5,7 @@
 #include <ArduinoJson.h>
 #include <LittleFS.h>
 
-/* Script voor ESP32 en  28BYJ-48  en  ULN2003*/
+/* Script voor ESP32 en 28BYJ-48 en ULN2003*/
 
 const char* ssid_home = WIFI_TP_SSID;
 const char* pass_home = WIFI_TP_PASSWORD;
@@ -37,7 +37,7 @@ const char* htmlPage PROGMEM = R"rawliteral(
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Stepper Pro v20.9 - Chaos Fix</title>
+<title>Stepper Pro v21.3 - Clean Editor</title>
 <style>
 body{background:#121212;color:#eee;font-family:sans-serif;text-align:center;margin:0;padding:20px;}
 canvas{background:#1e1e1e;border:2px solid #444;cursor:pointer;touch-action:none;display:block;margin:5px auto;border-radius:8px;box-shadow: 0 4px 15px rgba(0,0,0,0.5);}
@@ -174,23 +174,14 @@ function generateGhost() {
     
     ghostPoints = source.map((p, i) => {
         if (i === 0 || i === source.length - 1) return { ...p };
-        
-        // Bereken de maximale ruimte tot de buren om oversteken te voorkomen
         const prevT = source[i-1].time;
         const nextT = source[i+1].time;
-        const margin = (nextT - prevT) * 0.4 * chaos; // Max 40% van de tussenruimte verschuiven
-        
+        const margin = (nextT - prevT) * 0.4 * chaos;
         let newTime = p.time + (Math.random() - 0.5) * margin * 2;
-        // Harde grens: altijd minstens 10ms afstand tot buren
-        newTime = Math.max(prevT + 10, Math.min(nextT - 10, newTime));
-        
+        newTime = Math.round(Math.max(prevT + 10, Math.min(nextT - 10, newTime)));
         const jitterV = 25 * chaos; 
         let newValue = p.value + (Math.random() - 0.5) * jitterV;
-        
-        return { 
-            time: newTime, 
-            value: Math.max(-100, Math.min(100, newValue)) 
-        };
+        return { time: newTime, value: Math.max(-100, Math.min(100, newValue)) };
     });
 }
 
@@ -220,14 +211,21 @@ function markSaved(name){
     originalKeyframes = JSON.parse(JSON.stringify(keyframes));
 }
 
-function getExportData() { return { chaos: parseInt(document.getElementById("chaosSlider").value), keyframes: originalKeyframes.length > 0 ? originalKeyframes : keyframes }; }
+function getExportData() { 
+    // Rondt getallen af voor schone opslag en weergave
+    const cleanKeyframes = (originalKeyframes.length > 0 ? originalKeyframes : keyframes).map(kp => ({
+        time: Math.round(kp.time),
+        value: Math.round(kp.value * 100) / 100
+    }));
+    return { chaos: parseInt(document.getElementById("chaosSlider").value), keyframes: cleanKeyframes }; 
+}
 
 function sync(skipGhost=false){ 
     const data = getExportData();
-    editor.value=JSON.stringify(data,null,2);
-    document.getElementById("totalTime").value=Math.round(keyframes[keyframes.length-1].time/1000);
+    editor.value = JSON.stringify(data, null, 2);
+    document.getElementById("totalTime").value = Math.round(keyframes[keyframes.length-1].time/1000);
     if(firstCycleDone && !skipGhost) generateGhost();
-    return fetch('/set_live',{method:'POST',body:JSON.stringify(data)}); 
+    return fetch('/set_live', {method:'POST', body:JSON.stringify(data)}); 
 }
 
 function draw(){
@@ -269,7 +267,7 @@ canvas.onmousedown=(e)=>{
         return; 
     }
     selected=keyframes.find(p=>Math.hypot(toX(p.time)-x,toY(p.value)-y)<15);
-    if(!selected){ keyframes.push({time:fromX(x),value:fromY(y)}); keyframes.sort((a,b)=>a.time-b.time); markUnsaved(); sync(); }
+    if(!selected){ keyframes.push({time:Math.round(fromX(x)),value:fromY(y)}); keyframes.sort((a,b)=>a.time-b.time); markUnsaved(); sync(); }
 };
 
 canvas.ondblclick=(e)=>{
@@ -285,7 +283,7 @@ window.onmousemove=(e)=>{
     if(selected!==keyframes[0] && selected!==keyframes[keyframes.length-1]) {
         let t = fromX(e.clientX-rect.left);
         let idx = keyframes.indexOf(selected);
-        selected.time = Math.max(keyframes[idx-1].time + 10, Math.min(keyframes[idx+1].time - 10, t));
+        selected.time = Math.round(Math.max(keyframes[idx-1].time + 10, Math.min(keyframes[idx+1].time - 10, t)));
     }
     selected.value=Math.max(-100,Math.min(100,fromY(e.clientY-rect.top)));
     keyframes.sort((a,b)=>a.time-b.time); markUnsaved(); sync();
