@@ -5,6 +5,10 @@
 #include <ArduinoJson.h>
 #include <LittleFS.h>
 
+
+/* Script voor ESP32 en  28BYJ-48  en  ULN2003*/
+
+
 const char* ssid_home = WIFI_TP_SSID;
 const char* pass_home = WIFI_TP_PASSWORD;
 const char* ap_ssid   = SSID;
