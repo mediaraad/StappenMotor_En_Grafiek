@@ -5,9 +5,7 @@
 #include <ArduinoJson.h>
 #include <LittleFS.h>
 
-
 /* Script voor ESP32 en  28BYJ-48  en  ULN2003*/
-
 
 const char* ssid_home = WIFI_TP_SSID;
 const char* pass_home = WIFI_TP_PASSWORD;
@@ -23,6 +21,10 @@ unsigned long lastStepMicros = 0;
 const float MAX_STEPS_PER_SEC = 800.0;
 const int steps[8][4] = {{1,0,0,0},{1,1,0,0},{0,1,0,0},{0,1,1,0},{0,0,1,0},{0,0,1,1},{0,0,0,1},{1,0,0,1}};
 
+// Positie beheer
+long motorPosition = 0;
+bool isHoming = false;
+
 struct Keyframe { unsigned long time; float value; };
 Keyframe envelope[50];
 int envelopeSize = 2;
@@ -36,7 +38,7 @@ const char* htmlPage PROGMEM = R"rawliteral(
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Stepper Pro v20.7 - Stop & Revert</title>
+<title>Stepper Pro v20.8 - Home Position</title>
 <style>
 body{background:#121212;color:#eee;font-family:sans-serif;text-align:center;margin:0;padding:20px;}
 canvas{background:#1e1e1e;border:2px solid #444;cursor:pointer;touch-action:none;display:block;margin:5px auto;border-radius:8px;box-shadow: 0 4px 15px rgba(0,0,0,0.5);}
@@ -50,6 +52,7 @@ button:hover{background:#009cd1;transform:translateY(-1px);}
 .btn-new{background:#28a745 !important;}
 .btn-play{background:#28a745 !important; width:50px;}
 .btn-stop{background:#ffc107 !important; color:black !important; width:50px;}
+.btn-home{background:#9b59b6 !important; color:white !important;}
 .unsaved-container{height: 25px; margin-bottom:5px;}
 .unsaved-text{color:#ff9900; font-weight:bold; font-size: 13px; display:none;}
 #currentFileDisplay{color:#00ff00; font-weight:bold; margin-left:10px;}
@@ -85,6 +88,7 @@ textarea{width:800px; height:120px; background:#1e1e1e; color:#00ff00; border:1p
             <span style="border-left:1px solid #444;height:30px;"></span>
             <button id="playBtn" onclick="togglePause()" class="btn-play">⏸</button>
             <button onclick="stopAndReset()" class="btn-stop">■</button>
+            <button onclick="goHome()" class="btn-home">🏠 Home</button>
             <span style="border-left:1px solid #444;height:30px;"></span>
             <label>Duur (sec):</label>
             <input type="number" id="totalTime" value="8" min="1" style="width:55px;" onchange="updateDuration()">
@@ -145,13 +149,17 @@ async function stopAndReset() {
     document.getElementById("playBtn").innerText = "▶";
     pausedTime = 0;
     playStart = Date.now();
-    
-    // Herlaad de opgeslagen versie indien beschikbaar
     if(currentOpenFile) {
         await autoLoadPreset(currentOpenFile, true);
     } else {
         fetch('/toggle_pause?p=1&reset=1');
     }
+}
+
+function goHome() {
+    isPaused = true;
+    document.getElementById("playBtn").innerText = "▶";
+    fetch('/go_home');
 }
 
 function updateChaosLabel(){ document.getElementById("chaosVal").innerText = document.getElementById("chaosSlider").value + "%"; }
@@ -415,6 +423,7 @@ void setup() {
     if(server.hasArg("reset")) { startTime = millis(); currentSegment = 0; }
     server.send(200); 
   });
+  server.on("/go_home", [](){ isHoming = true; isPaused = true; server.send(200); });
   server.on("/set_live", HTTP_POST, [](){
     if(server.hasArg("plain")) { loadFromJSON(server.arg("plain")); File f = LittleFS.open("/active.json", "w"); f.print(server.arg("plain")); f.close(); }
     server.send(200);
@@ -459,10 +468,28 @@ void setup() {
 
 void loop() {
   server.handleClient();
+  
+  // Homing logica
+  if (isHoming) {
+    if (motorPosition == 0) {
+      isHoming = false;
+      for (int i = 0; i < 4; i++) digitalWrite(motorPins[i], LOW);
+    } else {
+      if (micros() - lastStepMicros >= 1250) { // Constante snelheid voor homing
+        lastStepMicros = micros();
+        if (motorPosition > 0) { motorPosition--; stepIndex = (stepIndex + 7) % 8; }
+        else { motorPosition++; stepIndex = (stepIndex + 1) % 8; }
+        for (int i = 0; i < 4; i++) digitalWrite(motorPins[i], steps[stepIndex][i]);
+      }
+    }
+    return;
+  }
+
   if (isPaused) {
     for (int i = 0; i < 4; i++) digitalWrite(motorPins[i], LOW);
     return;
   }
+
   unsigned long t = (millis() - startTime) % loopDuration;
   if (t < envelope[currentSegment].time) currentSegment = 0;
   while (currentSegment < envelopeSize - 1 && t > envelope[currentSegment + 1].time) {
@@ -471,11 +498,13 @@ void loop() {
   float f = (float)(t - envelope[currentSegment].time) / (envelope[currentSegment + 1].time - envelope[currentSegment].time);
   float currentVal = envelope[currentSegment].value + f * (envelope[currentSegment + 1].value - envelope[currentSegment].value);
   float speedFactor = abs(currentVal) / 100.0;
+  
   if (speedFactor > 0.02) {
     unsigned long stepInterval = 1000000.0 / (speedFactor * MAX_STEPS_PER_SEC);
     if (micros() - lastStepMicros >= stepInterval) {
       lastStepMicros = micros();
-      stepIndex = (currentVal > 0) ? (stepIndex + 1) % 8 : (stepIndex + 7) % 8;
+      if (currentVal > 0) { stepIndex = (stepIndex + 1) % 8; motorPosition++; }
+      else { stepIndex = (stepIndex + 7) % 8; motorPosition--; }
       for (int i = 0; i < 4; i++) digitalWrite(motorPins[i], steps[stepIndex][i]);
     }
   } else { for (int i = 0; i < 4; i++) digitalWrite(motorPins[i], LOW); }
