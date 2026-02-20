@@ -29,7 +29,7 @@ int envelopeSize = 2;
 unsigned long startTime = 0;
 unsigned long loopDuration = 8000;
 int currentSegment = 0; 
-bool isPaused = true; 
+bool isPaused = false; // Aangepast naar false voor auto-start na reset
 
 const char* htmlPage PROGMEM = R"rawliteral(
 <!DOCTYPE html>
@@ -37,7 +37,7 @@ const char* htmlPage PROGMEM = R"rawliteral(
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Stepper Pro v21.12 - Menu Fix</title>
+<title>Stepper Pro v21.18 - Auto-Start</title>
 <style>
 body{background:#121212;color:#eee;font-family:sans-serif;text-align:center;margin:0;padding:20px;}
 #canvasContainer{width:100%; max-width:1200px; margin:0 auto; position:relative;}
@@ -93,7 +93,7 @@ textarea{width:100%; max-width:1200px; height:120px; background:#1e1e1e; color:#
             <label>Duur (sec):</label>
             <input type="number" id="totalTime" value="8" min="1" style="width:55px;" onchange="updateDuration()">
         </div>
-        <div class="help-text">Edit alleen in beginstand (■) | X: VERTICAAL (Tijd gelijk) | Y: HORIZONTAAL (Waarde gelijk) | Ctrl+Z: Undo</div>
+        <div class="help-text">Klik: Punt toevoegen | Sleep: Kader | J: Join | X/Y: Uitlijnen | Esc: Deselecteer</div>
     </div>
     <div class="locked-info" id="lockedStatus"></div>
     <div class="unsaved-container"><span id="unsavedWarning" class="unsaved-text">⚠️ NIET OPGESLAGEN</span></div>
@@ -121,7 +121,11 @@ let draggingPoint=null, lastMouseX=0, lastMouseY=0;
 let historyStack = [];
 let playStart=Date.now(), isUnsaved=false, currentOpenFile="";
 let isDraggingPlayhead = false, manualTime = 0, ghostPoints = [], lastElapsed = 0, firstCycleDone = false;
-let pausedTime = 0, isPaused = true; 
+let pausedTime = 0, isPaused = false; 
+
+let isSelectingBox = false;
+let hasMovedForBox = false;
+let boxStart = {x:0, y:0}, boxEnd = {x:0, y:0};
 
 function isLocked() { return !isPaused || pausedTime !== 0; }
 
@@ -163,10 +167,14 @@ document.getElementById("modalConfirm").onclick=()=>{
     if(modalResolve) modalResolve(val || true); 
 };
 
-function togglePause() {
-    isPaused = !isPaused;
+function updatePlayButtonUI() {
     const btn = document.getElementById("playBtn");
     btn.innerText = isPaused ? "▶" : "⏸";
+}
+
+function togglePause() {
+    isPaused = !isPaused;
+    updatePlayButtonUI();
     if(isPaused) {
         pausedTime = (Date.now() - playStart) % keyframes[keyframes.length-1].time;
     } else {
@@ -177,7 +185,7 @@ function togglePause() {
 
 async function stopAndReset() {
     isPaused = true;
-    document.getElementById("playBtn").innerText = "▶";
+    updatePlayButtonUI();
     pausedTime = 0;
     playStart = Date.now();
     fetch('/toggle_pause?p=1&reset=1');
@@ -274,6 +282,14 @@ function draw(){
         ctx.fillStyle = isSelected ? "#ffffff" : "#ff9900"; ctx.fill();
         if(isSelected) { ctx.strokeStyle = "#00bfff"; ctx.lineWidth = 2; ctx.stroke(); }
     });
+
+    if(isSelectingBox && hasMovedForBox) {
+        ctx.fillStyle = "rgba(0, 191, 255, 0.2)"; ctx.strokeStyle = "#00bfff"; ctx.setLineDash([5, 5]);
+        ctx.fillRect(boxStart.x, boxStart.y, boxEnd.x - boxStart.x, boxEnd.y - boxStart.y);
+        ctx.strokeRect(boxStart.x, boxStart.y, boxEnd.x - boxStart.x, boxEnd.y - boxStart.y);
+        ctx.setLineDash([]);
+    }
+
     ctx.strokeStyle="red"; ctx.lineWidth=3; ctx.beginPath(); ctx.moveTo(toX(elapsed),0); ctx.lineTo(toX(elapsed),canvas.height); ctx.stroke();
     requestAnimationFrame(draw);
 }
@@ -282,12 +298,13 @@ canvas.onmousedown=(e)=>{
     const rect=canvas.getBoundingClientRect(), x=(e.clientX-rect.left)*(canvas.width/rect.width), y=e.clientY-rect.top;
     let dur=keyframes[keyframes.length-1].time;
     let currentPos = isPaused ? pausedTime : (Date.now()-playStart)%dur;
-    if(Math.abs(x - toX(currentPos)) < 30) { isDraggingPlayhead = true; manualTime = currentPos; return; }
     
+    if(Math.abs(x - toX(currentPos)) < 30) { isDraggingPlayhead = true; manualTime = currentPos; return; }
     if(isLocked()) return; 
 
     lastMouseX = x; lastMouseY = y;
     let hit = keyframes.find(p=>Math.hypot(toX(p.time)-x,toY(p.value)-y)<15);
+    
     if(hit) {
         saveToHistory();
         if(e.shiftKey) {
@@ -296,11 +313,7 @@ canvas.onmousedown=(e)=>{
         } else { if(!selectedPoints.includes(hit)) selectedPoints = [hit]; }
         draggingPoint = hit;
     } else {
-        saveToHistory(); 
-        selectedPoints = [];
-        const newPoint = {time:Math.round(fromX(x)),value:fromY(y)};
-        keyframes.push(newPoint); keyframes.sort((a,b)=>a.time-b.time); 
-        markUnsaved(); sync();
+        isSelectingBox = true; hasMovedForBox = false; boxStart = {x, y}; boxEnd = {x, y};
     }
 };
 
@@ -320,8 +333,17 @@ window.onmousemove=(e)=>{
     const rect=canvas.getBoundingClientRect();
     const x=(e.clientX-rect.left)*(canvas.width/rect.width);
     const y=e.clientY-rect.top;
+    
     if(isDraggingPlayhead) { manualTime = Math.max(0, Math.min(keyframes[keyframes.length-1].time, fromX(x))); return; }
+    
+    if(isSelectingBox) {
+        boxEnd = {x, y};
+        if(Math.hypot(x-boxStart.x, y-boxStart.y) > 5) hasMovedForBox = true;
+        return;
+    }
+
     if(!draggingPoint || isLocked()) return;
+    
     const dx = fromX(x) - fromX(lastMouseX);
     const dy = fromY(y) - fromY(lastMouseY);
     let canMoveX = true;
@@ -340,36 +362,66 @@ window.onmousemove=(e)=>{
     keyframes.sort((a,b)=>a.time-b.time); markUnsaved(); sync();
 };
 
-window.onmouseup=()=>{ 
+window.onmouseup=(e)=>{ 
     if(isDraggingPlayhead) { 
         if(isPaused) pausedTime = manualTime; else playStart = Date.now() - manualTime; 
         fetch('/reset_clock_to?t=' + Math.round(manualTime)); 
     } 
+    
+    if(isSelectingBox) {
+        if(!hasMovedForBox) {
+            saveToHistory();
+            const rect=canvas.getBoundingClientRect(), x=(e.clientX-rect.left)*(canvas.width/rect.width), y=e.clientY-rect.top;
+            keyframes.push({time:Math.round(fromX(x)), value:fromY(y)});
+            keyframes.sort((a,b)=>a.time-b.time);
+            if(!e.shiftKey) selectedPoints = [];
+            markUnsaved(); sync();
+        } else {
+            const xMin = Math.min(boxStart.x, boxEnd.x), xMax = Math.max(boxStart.x, boxEnd.x);
+            const yMin = Math.min(boxStart.y, boxEnd.y), yMax = Math.max(boxStart.y, boxEnd.y);
+            if(!e.shiftKey) selectedPoints = [];
+            keyframes.forEach(p => {
+                const px = toX(p.time), py = toY(p.value);
+                if(px >= xMin && px <= xMax && py >= yMin && py <= yMax) { if(!selectedPoints.includes(p)) selectedPoints.push(p); }
+            });
+        }
+        isSelectingBox = false;
+    }
     draggingPoint=null; isDraggingPlayhead = false; 
 };
 
 window.onkeydown=(e)=>{
     if(e.ctrlKey && e.key === 'z') { e.preventDefault(); undo(); return; }
+    if(e.key === "Escape" || e.key === "Esc") { selectedPoints = []; return; }
+
     if(isLocked() || selectedPoints.length === 0 || document.activeElement === editor) return;
     
     let changed = false;
     const key = e.key.toLowerCase();
     
-    if(key === "y" && selectedPoints.length === 2) {
-        let avgT = Math.round((selectedPoints[0].time + selectedPoints[1].time) / 2);
-        if(Math.abs(selectedPoints[0].value - selectedPoints[1].value) < 0.1) return;
+    if(key === "j" && selectedPoints.length >= 2) {
         saveToHistory();
-        selectedPoints.forEach(p => {
-            let idx = keyframes.indexOf(p);
-            if(idx > 0 && idx < keyframes.length - 1) { p.time = avgT; }
-        });
+        const sumT = selectedPoints.reduce((acc, p) => acc + p.time, 0), sumV = selectedPoints.reduce((acc, p) => acc + p.value, 0);
+        const avgT = Math.round(sumT / selectedPoints.length), avgV = sumV / selectedPoints.length;
+        const isStartSelected = selectedPoints.some(p => keyframes.indexOf(p) === 0);
+        const isEndSelected = selectedPoints.some(p => keyframes.indexOf(p) === keyframes.length - 1);
+        keyframes = keyframes.filter(p => !selectedPoints.includes(p));
+        if(isStartSelected) keyframes.push({time: 0, value: avgV});
+        if(isEndSelected) keyframes.push({time: keyframes.length > 0 ? Math.max(...keyframes.map(p=>p.time)) : 8000, value: avgV});
+        if(!isStartSelected && !isEndSelected) keyframes.push({time: avgT, value: avgV});
+        selectedPoints = []; changed = true;
+    }
+
+    if(key === "y" && selectedPoints.length >= 2) {
+        saveToHistory();
+        const avgT = Math.round(selectedPoints.reduce((acc, p) => acc + p.time, 0) / selectedPoints.length);
+        selectedPoints.forEach(p => { if(keyframes.indexOf(p) > 0 && keyframes.indexOf(p) < keyframes.length - 1) p.time = avgT; });
         changed = true;
     }
 
-    if(key === "x" && selectedPoints.length === 2) {
-        let avgV = (selectedPoints[0].value + selectedPoints[1].value) / 2;
-        if(Math.abs(selectedPoints[0].time - selectedPoints[1].time) < 1) return;
+    if(key === "x" && selectedPoints.length >= 2) {
         saveToHistory();
+        const avgV = selectedPoints.reduce((acc, p) => acc + p.value, 0) / selectedPoints.length;
         selectedPoints.forEach(p => { p.value = avgV; });
         changed = true;
     }
@@ -401,12 +453,8 @@ async function autoLoadPreset(targetName, forceRevert=false){
     else { keyframes = data; document.getElementById("chaosSlider").value = 0; }
     updateChaosLabel(); firstCycleDone = false; ghostPoints = []; selectedPoints = []; historyStack = [];
     markSaved(name); await sync(true); 
-
-    // FIX: Bij wissel altijd pauzeren aan het begin (tijd 0)
-    isPaused = true;
-    document.getElementById("playBtn").innerText = "▶";
-    pausedTime = 0;
-    playStart = Date.now();
+    isPaused = true; updatePlayButtonUI();
+    pausedTime = 0; playStart = Date.now();
     fetch('/toggle_pause?p=1&reset=1');
 }
 
@@ -469,8 +517,12 @@ function updateDuration(){
 function applyJson(){ if(isLocked()) return; try{const data=JSON.parse(editor.value); if(data.keyframes) keyframes=data.keyframes; else keyframes=data; markUnsaved(); sync();}catch(e){} }
 
 async function init(){
-    const [dataRes, nameRes, listRes] = await Promise.all([ fetch('/get_active'), fetch('/get_active_name'), fetch('/list') ]);
+    const [dataRes, nameRes, listRes, pauseRes] = await Promise.all([ fetch('/get_active'), fetch('/get_active_name'), fetch('/list'), fetch('/get_pause_state') ]);
     const data = await dataRes.json(); const activeName = await nameRes.text(); const list = await listRes.json();
+    const pauseState = await pauseRes.text();
+    isPaused = (pauseState == "1");
+    updatePlayButtonUI();
+    
     if(data.keyframes) { keyframes = data.keyframes; document.getElementById("chaosSlider").value = data.chaos || 0; }
     else { keyframes = data; }
     updateChaosLabel();
@@ -505,10 +557,20 @@ void setup() {
   Serial.begin(115200);
   for (int i = 0; i < 4; i++) pinMode(motorPins[i], OUTPUT);
   LittleFS.begin(true);
-  if (LittleFS.exists("/active.json")) loadFromJSON(LittleFS.open("/active.json", "r").readString());
+  
+  // Laad laatste configuratie
+  if (LittleFS.exists("/active.json")) {
+    loadFromJSON(LittleFS.open("/active.json", "r").readString());
+  }
+  
+  // Start de motor direct na opstarten
+  isPaused = false;
+  startTime = millis();
+
   WiFi.mode(WIFI_AP_STA); WiFi.softAP(ap_ssid, ap_pass); WiFi.begin(ssid_home, pass_home); MDNS.begin(mdns_name);
   server.on("/", [](){ server.send(200, "text/html", htmlPage); });
   server.on("/get_time", [](){ server.send(200, "text/plain", String((millis() - startTime) % loopDuration)); });
+  server.on("/get_pause_state", [](){ server.send(200, "text/plain", isPaused ? "1" : "0"); });
   server.on("/toggle_pause", [](){ 
     if(server.hasArg("p")) isPaused = (server.arg("p") == "1");
     if(server.hasArg("reset")) { startTime = millis(); currentSegment = 0; }
