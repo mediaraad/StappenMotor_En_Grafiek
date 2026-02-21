@@ -37,7 +37,7 @@ const char* htmlPage PROGMEM = R"rawliteral(
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Stepper Pro v22.4 - Fixed Chaos</title>
+<title>Stepper Pro v22.4 - Auto-Play</title>
 <style>
   :root {
     --bg-dark: #121212;
@@ -166,7 +166,19 @@ document.getElementById("modalConfirm").onclick=()=>{
 
 function updatePlayButtonUI() { const btn = document.getElementById("playBtn"); btn.innerText = isPaused ? "▶" : "⏸"; }
 function togglePause() { isPaused = !isPaused; updatePlayButtonUI(); if(isPaused) pausedTime = (Date.now() - playStart) % keyframes[keyframes.length-1].time; else playStart = Date.now() - pausedTime; fetch('/toggle_pause?p=' + (isPaused ? "1" : "0")); }
-async function stopAndReset() { isPaused = true; updatePlayButtonUI(); pausedTime = 0; playStart = Date.now(); fetch('/toggle_pause?p=1&reset=1'); }
+
+async function stopAndReset() { 
+    isPaused = true; 
+    updatePlayButtonUI(); 
+    pausedTime = 0; 
+    playStart = Date.now(); 
+    if(originalKeyframes.length > 0) { keyframes = JSON.parse(JSON.stringify(originalKeyframes)); }
+    ghostPoints = [];
+    firstCycleDone = false;
+    sync(true); 
+    fetch('/toggle_pause?p=1&reset=1'); 
+}
+
 function updateChaosLabel(){ document.getElementById("chaosVal").innerText = document.getElementById("chaosSlider").value + "%"; }
 
 const toX=(t)=>t*canvas.width/keyframes[keyframes.length-1].time;
@@ -176,16 +188,14 @@ const fromY=(y)=>(canvas.height/2 - y)*100/(canvas.height/2.2);
 
 function generateGhost() {
     const chaos = document.getElementById("chaosSlider").value / 100;
-    if(chaos <= 0) { ghostPoints = []; return; }
+    if(chaos <= 0 || isPaused) { ghostPoints = []; return; }
     const source = originalKeyframes.length > 0 ? originalKeyframes : keyframes;
     ghostPoints = source.map((p, i) => {
         if (i === 0 || i === source.length - 1) return { ...p };
         const prevT = source[i-1].time, nextT = source[i+1].time;
-        // Verbeterde veiligheidsmarge: punt kan nooit over de buren heen springen
         const safeSpanLeft = (p.time - prevT) * 0.9;
         const safeSpanRight = (nextT - p.time) * 0.9;
         const maxShiftT = Math.min(safeSpanLeft, safeSpanRight) * chaos;
-        
         let newTime = Math.round(p.time + (Math.random() - 0.5) * maxShiftT * 2);
         let newValue = Math.max(-100, Math.min(100, p.value + (Math.random() - 0.5) * 40 * chaos));
         return { time: newTime, value: newValue };
@@ -387,31 +397,47 @@ void loadFromJSON(String json) {
 }
 
 void setup() {
-  Serial.begin(115200); for (int i = 0; i < 4; i++) pinMode(motorPins[i], OUTPUT); LittleFS.begin(true);
-  if (LittleFS.exists("/active.json")) loadFromJSON(LittleFS.open("/active.json", "r").readString());
-  isPaused = false; startTime = millis();
+  Serial.begin(115200); 
+  for (int i = 0; i < 4; i++) pinMode(motorPins[i], OUTPUT); 
+  LittleFS.begin(true);
+
+  // LAAD LAATSTE CONFIG EN START MOTOR DIRECT
+  if (LittleFS.exists("/active.json")) {
+    loadFromJSON(LittleFS.open("/active.json", "r").readString());
+  }
+  
+  isPaused = false; // DIRECT STARTEN NA REBOOT
+  startTime = millis();
+
   WiFi.mode(WIFI_AP_STA); WiFi.softAP(ap_ssid, ap_pass); WiFi.begin(ssid_home, pass_home); MDNS.begin(mdns_name);
+  
   server.on("/", [](){ server.send(200, "text/html", htmlPage); });
   server.on("/get_time", [](){ server.send(200, "text/plain", String((millis() - startTime) % loopDuration)); });
   server.on("/get_pause_state", [](){ server.send(200, "text/plain", isPaused ? "1" : "0"); });
   server.on("/toggle_pause", [](){ if(server.hasArg("p")) isPaused = (server.arg("p") == "1"); if(server.hasArg("reset")) { startTime = millis(); currentSegment = 0; } server.send(200); });
   server.on("/set_live", HTTP_POST, [](){ if(server.hasArg("plain")) { loadFromJSON(server.arg("plain")); File f = LittleFS.open("/active.json", "w"); f.print(server.arg("plain")); f.close(); } server.send(200); });
+  
   server.on("/save", HTTP_POST, [](){
     String name = server.arg("name"), data = server.arg("plain");
     File f1 = LittleFS.open("/" + name + ".json", "w"); f1.print(data); f1.close();
     File f2 = LittleFS.open("/active.json", "w"); f2.print(data); f2.close();
-    File f3 = LittleFS.open("/active_name.txt", "w"); f3.print(name); f3.close(); server.send(200);
+    File f3 = LittleFS.open("/active_name.txt", "w"); f3.print(name); f3.close(); 
+    server.send(200);
   });
+
   server.on("/load", HTTP_GET, [](){ String name = server.arg("name"); File f = LittleFS.open("/" + name + ".json", "r"); if(f){ server.send(200, "application/json", f.readString()); f.close(); } else server.send(404); });
   server.on("/delete", HTTP_DELETE, [](){ String name = server.arg("name"); if(LittleFS.exists("/"+name+".json")) LittleFS.remove("/"+name+".json"); server.send(200); });
+  
   server.on("/list", HTTP_GET, [](){
     String list = "["; File root = LittleFS.open("/"); File file = root.openNextFile();
     while (file) { String n = file.name(); if (n.endsWith(".json") && n != "active.json") { if (list != "[") list += ","; list += "\"" + n.substring(0, n.length() - 5) + "\""; } file = root.openNextFile(); }
     list += "]"; server.send(200, "application/json", list);
   });
-  server.on("/get_active", HTTP_GET, [](){ File f = LittleFS.open("/active.json", "r"); if(f) { server.send(200, "application/json", f.readString()); f.close(); } else server.send(200, "application/json", "[]"); });
+
+  server.on("/get_active", HTTP_GET, [](){ File f = LittleFS.open("/active.json", "r"); if(f) { server.send(200, "application/json", f.readString()); f.close(); } else server.send(200, "application/json", "{\"chaos\":0,\"keyframes\":[{\"time\":0,\"value\":0},{\"time\":8000,\"value\":0}]}"); });
   server.on("/get_active_name", HTTP_GET, [](){ if (LittleFS.exists("/active_name.txt")) { File f = LittleFS.open("/active_name.txt", "r"); String n = f.readString(); f.close(); server.send(200, "text/plain", n); } else server.send(200, "text/plain", ""); });
   server.on("/reset_clock_to", [](){ if(server.hasArg("t")) { startTime = millis() - server.arg("t").toInt(); currentSegment = 0; } server.send(200); });
+  
   server.begin();
 }
 
