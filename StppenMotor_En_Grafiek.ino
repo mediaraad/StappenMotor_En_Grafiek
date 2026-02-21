@@ -32,12 +32,11 @@ int currentSegment = 0;
 bool isPaused = false; 
 
 const char* htmlPage PROGMEM = R"rawliteral(
-<!DOCTYPE html>
 <html lang="nl">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Stepper Pro v21.22 - Delete Restored</title>
+<title>Stepper Pro v21.24 - Sync Fix</title>
 <style>
 body{background:#121212;color:#eee;font-family:sans-serif;text-align:center;margin:0;padding:20px;}
 #canvasContainer{width:100%; max-width:1200px; margin:0 auto; position:relative;}
@@ -93,7 +92,7 @@ textarea{width:100%; max-width:1200px; height:120px; background:#1e1e1e; color:#
             <label>Duur (sec):</label>
             <input type="number" id="totalTime" value="8" min="1" style="width:55px;" onchange="updateDuration()">
         </div>
-        <div class="help-text">Klik: Punt toevoegen | Sleep: Kader | Del/Back: Wis | J: Join | X/Y: Lijn uit | Esc: Deselecteer</div>
+        <div class="help-text">Klik: Punt toevoegen | Rechtsklik: Deselecteer | Sleep: Kader | Del/Back: Wis | J: Join | X/Y: Lijn uit</div>
     </div>
     <div class="locked-info" id="lockedStatus"></div>
     <div class="unsaved-container"><span id="unsavedWarning" class="unsaved-text">⚠️ NIET OPGESLAGEN</span></div>
@@ -121,6 +120,8 @@ let draggingPoint=null, lastMouseX=0, lastMouseY=0, historyStack = [];
 let playStart=Date.now(), isUnsaved=false, currentOpenFile="";
 let isDraggingPlayhead = false, manualTime = 0, ghostPoints = [], lastElapsed = 0, firstCycleDone = false, pausedTime = 0, isPaused = false; 
 let isSelectingBox = false, hasMovedForBox = false, boxStart = {x:0, y:0}, boxEnd = {x:0, y:0};
+
+canvas.oncontextmenu = (e) => e.preventDefault();
 
 function isLocked() { return !isPaused || pausedTime !== 0; }
 
@@ -203,10 +204,11 @@ function markUnsaved(){ isUnsaved=true; document.getElementById("unsavedWarning"
 function markSaved(name){ 
     isUnsaved = false; document.getElementById("unsavedWarning").style.display = "none"; 
     const sel = document.getElementById("presetSelect");
-    let exists = false;
+    let found = false;
     for(let i=0; i<sel.options.length; i++) {
-        if(sel.options[i].value === name) { exists = true; sel.selectedIndex = i; }
+        if(sel.options[i].value === name) { sel.selectedIndex = i; found = true; break; }
     }
+    if(!found) sel.selectedIndex = -1;
     currentOpenFile = name; document.getElementById("currentFileDisplay").innerText = name ? " - " + name : "";
     originalKeyframes = JSON.parse(JSON.stringify(keyframes));
 }
@@ -258,6 +260,7 @@ function draw(){
 }
 
 canvas.onmousedown=(e)=>{
+    if(e.button === 2) { selectedPoints = []; return; }
     const rect=canvas.getBoundingClientRect(), x=(e.clientX-rect.left)*(canvas.width/rect.width), y=e.clientY-rect.top;
     let dur=keyframes[keyframes.length-1].time, currentPos = isPaused ? pausedTime : (Date.now()-playStart)%dur;
     if(Math.abs(x - toX(currentPos)) < 30) { isDraggingPlayhead = true; manualTime = currentPos; return; }
@@ -342,10 +345,9 @@ async function autoLoadPreset(targetName){
 async function updatePresetList(targetName){
     const res = await fetch('/list'), list = await res.json(), sel = document.getElementById("presetSelect"); sel.innerHTML = "";
     list.forEach(f=>{ let o=document.createElement("option"); o.value=o.textContent=f; if(f === targetName) o.selected = true; sel.appendChild(o); });
-    if(!targetName) sel.selectedIndex = -1; return list;
+    if(!targetName || !list.includes(targetName)) sel.selectedIndex = -1; return list;
 }
 
-// DELETE FUNCTION RESTORED
 async function deletePreset(){
     const name = document.getElementById("presetSelect").value;
     if(!name || name === "" || !await openModal("Verwijder '"+name+"' definitief?")) return;
@@ -386,7 +388,9 @@ async function init(){
     const data = await dataRes.json(), activeName = await nameRes.text(), list = await listRes.json();
     isPaused = (await pauseRes.text() == "1"); updatePlayButtonUI();
     keyframes = data.keyframes || data; document.getElementById("chaosSlider").value = data.chaos || 0; updateChaosLabel();
-    const validatedName = list.includes(activeName) ? activeName : ""; await updatePresetList(validatedName); markSaved(validatedName);
+    const validatedName = list.includes(activeName) ? activeName : (list.length > 0 ? list[0] : "");
+    await updatePresetList(validatedName);
+    if(validatedName && validatedName !== activeName) autoLoadPreset(validatedName); else markSaved(validatedName);
     playStart = Date.now() - parseInt(await (await fetch('/get_time')).text()); sync(true); draw();
 }
 init();
@@ -423,10 +427,15 @@ void setup() {
   });
   server.on("/load", HTTP_GET, [](){ String name = server.arg("name"); File f = LittleFS.open("/" + name + ".json", "r"); if(f){ server.send(200, "application/json", f.readString()); f.close(); } else server.send(404); });
   
-  // DELETE ROUTE RESTORED
   server.on("/delete", HTTP_DELETE, [](){ 
     String name = server.arg("name"); 
     if(LittleFS.exists("/"+name+".json")) LittleFS.remove("/"+name+".json");
+    // Extra check: was dit het actieve bestand?
+    if (LittleFS.exists("/active_name.txt")) {
+       File f = LittleFS.open("/active_name.txt", "r");
+       String active = f.readString(); f.close();
+       if(active == name) LittleFS.remove("/active_name.txt");
+    }
     server.send(200); 
   });
 
