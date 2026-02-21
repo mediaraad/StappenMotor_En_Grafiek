@@ -32,80 +32,100 @@ int currentSegment = 0;
 bool isPaused = false; 
 
 const char* htmlPage PROGMEM = R"rawliteral(
+<!DOCTYPE html>
 <html lang="nl">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Stepper Pro v21.24 - Sync Fix</title>
+<title>Stepper Pro v22.4 - Fixed Chaos</title>
 <style>
-body{background:#121212;color:#eee;font-family:sans-serif;text-align:center;margin:0;padding:20px;}
-#canvasContainer{width:100%; max-width:1200px; margin:0 auto; position:relative;}
-canvas{background:#1e1e1e;border:2px solid #444;cursor:pointer;touch-action:none;display:block;width:100%;border-radius:8px;box-shadow: 0 4px 15px rgba(0,0,0,0.5);outline:none;}
-.controls{background:#2a2a2a;padding:15px;border-radius:8px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;margin:0 auto 10px auto;border:1px solid #444;max-width:1200px;box-sizing:border-box;box-shadow: 0 2px 10px rgba(0,0,0,0.3);}
-.control-row{display:flex; align-items:center; justify-content:center; gap:10px; flex-wrap:wrap;}
-input,button,select{height:42px; padding:0 10px; border-radius:4px;border:none;background:#444;color:white;outline:none;font-size:14px;transition:0.2s;}
-button{background:#00bfff;cursor:pointer;font-weight:bold;}
-button:hover{background:#009cd1;transform:translateY(-1px);}
-.btn-delete{background:#ff4444 !important;}
-.btn-alt{background:#555 !important;}
-.btn-new{background:#28a745 !important;}
-.btn-play{background:#28a745 !important; width:50px;}
-.btn-stop{background:#ffc107 !important; color:black !important; width:50px;}
-.unsaved-container{height: 25px; margin-bottom:5px;}
-.unsaved-text{color:#ff9900; font-weight:bold; font-size: 13px; display:none;}
-#currentFileDisplay{color:#00ff00; font-weight:bold; margin-left:10px;}
-textarea{width:100%; max-width:1200px; height:120px; background:#1e1e1e; color:#00ff00; border:1px solid #444; font-family:monospace; margin-top:10px; padding:10px; border-radius:8px; box-sizing:border-box;}
-.slider-group{display:flex; align-items:center; gap:5px; background:#333; padding:0 10px; border-radius:4px; height:42px;}
-#customModal{display:none; position:fixed; z-index:1000; left:0; top:0; width:100%; height:100%; background:rgba(0,0,0,0.85); backdrop-filter:blur(5px);}
-.modal-content{background:#2a2a2a; margin:15% auto; padding:30px; border:1px solid #00bfff; width:300px; border-radius:16px;}
-#modalInput{width:100%; margin-bottom:20px; text-align:center; display:none; background:#1e1e1e; border:1px solid #444; color:white; height:35px;}
-.modal-btns{display:flex; justify-content:center; gap:15px;}
-.help-text{font-size:11px; color:#888; margin-top:5px;}
-.locked-info {color: #ff4444; font-size: 12px; font-weight: bold; margin-bottom: 5px; height: 15px;}
+  :root {
+    --bg-dark: #121212;
+    --bg-panel: #2a2a2a;
+    --accent: #00bfff;
+    --accent-hover: #009cd1;
+    --danger: #ff4444;
+    --success: #28a745;
+    --warning: #ff9900;
+    --text: #eee;
+    --border: #444;
+  }
+
+  body { background: var(--bg-dark); color: var(--text); font-family: sans-serif; text-align: center; margin: 0; padding: 20px; font-weight: normal; }
+  #canvasContainer { width: 100%; max-width: 1200px; margin: 20px auto; position: relative; }
+  canvas { background: #1e1e1e; border: 2px solid var(--border); cursor: pointer; touch-action: none; display: block; width: 100%; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); outline: none; }
+  
+  .controls { background: var(--bg-panel); padding: 15px; border-radius: 8px; display: flex; flex-direction: column; align-items: center; gap: 12px; margin: 0 auto; border: 1px solid var(--border); max-width: 1200px; box-sizing: border-box; box-shadow: 0 2px 10px rgba(0,0,0,0.3); }
+  .control-row { display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; }
+  
+  input, button, select { height: 42px; padding: 0 10px; border-radius: 4px; border: none; background: var(--border); color: white; outline: none; font-size: 14px; transition: 0.2s; font-weight: normal; }
+  button { background: var(--accent); cursor: pointer; }
+  button:hover { background: var(--accent-hover); transform: translateY(-1px); }
+  
+  .btn-delete { background: var(--danger) !important; }
+  .btn-alt { background: #555 !important; }
+  .btn-new { background: var(--success) !important; }
+  .btn-play { background: var(--success) !important; width: 50px; }
+  .btn-stop { background: #ffc107 !important; color: black !important; width: 50px; }
+
+  .status-line { height: 20px; margin-top: 10px; }
+  .unsaved-text { color: var(--warning); font-size: 13px; display: none; }
+  #currentFileDisplay { color: #00ff00; margin-left: 10px; }
+  
+  textarea { width: 100%; max-width: 1200px; height: 120px; background: #1e1e1e; color: #00ff00; border: 1px solid var(--border); font-family: monospace; margin: 20px auto 0 auto; padding: 10px; border-radius: 8px; box-sizing: border-box; display: block; }
+  .slider-group { display: flex; align-items: center; gap: 5px; background: #333; padding: 0 10px; border-radius: 4px; height: 42px; }
+  
+  label { font-size: 14px; }
+
+  #customModal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); backdrop-filter: blur(5px); }
+  .modal-content { background: var(--bg-panel); margin: 15% auto; padding: 30px; border: 1px solid var(--accent); width: 300px; border-radius: 16px; }
 </style>
 </head>
 <body>
     <h2>Motor Control Pro <span id="currentFileDisplay"></span></h2>
+    
     <div class="controls">
         <div class="control-row">
-            <button onclick="createNew()" class="btn-new">➕</button>
+            <button onclick="createNew()" class="btn-new" title="Nieuwe configuratie">➕</button>
             <select id="presetSelect" onchange="autoLoadPreset()"></select>
-            <button onclick="deletePreset()" class="btn-delete">🗑️</button>
-            <span style="border-left:1px solid #444;height:30px;"></span>
+            <button onclick="deletePreset()" class="btn-delete" title="Verwijder preset">🗑️</button>
+            <span style="border-left:1px solid var(--border);height:30px;"></span>
             <button onclick="saveCurrent()">Opslaan</button>
             <button onclick="saveAs()" class="btn-alt">Opslaan als...</button>
-            <span style="border-left:1px solid #444;height:30px;"></span>
-            <button onclick="downloadConfig()" class="btn-alt">💾</button>
-            <button onclick="document.getElementById('fileInput').click()" class="btn-alt">📂</button>
+            <span style="border-left:1px solid var(--border);height:30px;"></span>
+            <button onclick="downloadConfig()" class="btn-alt" title="Download naar PC">💾</button>
+            <button onclick="document.getElementById('fileInput').click()" class="btn-alt" title="Upload van PC">📂</button>
             <input type="file" id="fileInput" style="display:none" onchange="handleFileUpload(event)" accept=".json">
         </div>
+        
         <div class="control-row">
             <div class="slider-group">
                 <label style="font-size:12px;">Chaos</label>
                 <input type="range" id="chaosSlider" min="0" max="100" value="0" oninput="updateChaosLabel(); markUnsaved(); sync(true);">
                 <span id="chaosVal" style="font-size:12px;width:30px;">0%</span>
             </div>
-            <span style="border-left:1px solid #444;height:30px;"></span>
+            <span style="border-left:1px solid var(--border);height:30px;"></span>
             <button id="playBtn" onclick="togglePause()" class="btn-play">▶</button>
             <button onclick="stopAndReset()" class="btn-stop">■</button>
-            <span style="border-left:1px solid #444;height:30px;"></span>
+            <span style="border-left:1px solid var(--border);height:30px;"></span>
             <label>Duur (sec):</label>
             <input type="number" id="totalTime" value="8" min="1" style="width:55px;" onchange="updateDuration()">
         </div>
-        <div class="help-text">Klik: Punt toevoegen | Rechtsklik: Deselecteer | Sleep: Kader | Del/Back: Wis | J: Join | X/Y: Lijn uit</div>
     </div>
-    <div class="locked-info" id="lockedStatus"></div>
-    <div class="unsaved-container"><span id="unsavedWarning" class="unsaved-text">⚠️ NIET OPGESLAGEN</span></div>
+
+    <div class="status-line"><span id="unsavedWarning" class="unsaved-text">⚠️ NIET OPGESLAGEN</span></div>
+    
     <div id="canvasContainer">
         <canvas id="envelopeCanvas" height="400" tabindex="1"></canvas>
     </div>
+    
     <textarea id="jsonEditor" spellcheck="false" oninput="applyJson()"></textarea>
 
     <div id="customModal">
         <div class="modal-content">
             <div id="modalText" style="margin-bottom:15px;"></div>
-            <input type="text" id="modalInput">
-            <div class="modal-btns">
+            <input type="text" id="modalInput" style="width:100%; margin-bottom:20px; text-align:center; display:none; background:#1e1e1e; border:1px solid var(--border); color:white; height:35px;">
+            <div class="modal-btns" style="display:flex; justify-content:center; gap:15px;">
                 <button id="modalConfirm">Ja</button>
                 <button onclick="closeModal()" class="btn-alt">Annuleer</button>
             </div>
@@ -121,29 +141,12 @@ let playStart=Date.now(), isUnsaved=false, currentOpenFile="";
 let isDraggingPlayhead = false, manualTime = 0, ghostPoints = [], lastElapsed = 0, firstCycleDone = false, pausedTime = 0, isPaused = false; 
 let isSelectingBox = false, hasMovedForBox = false, boxStart = {x:0, y:0}, boxEnd = {x:0, y:0};
 
-canvas.oncontextmenu = (e) => e.preventDefault();
-
 function isLocked() { return !isPaused || pausedTime !== 0; }
+function resizeCanvas() { const container = document.getElementById("canvasContainer"); canvas.width = container.clientWidth; }
+window.addEventListener('resize', resizeCanvas); resizeCanvas();
 
-function resizeCanvas() {
-    const container = document.getElementById("canvasContainer");
-    canvas.width = container.clientWidth;
-}
-window.addEventListener('resize', resizeCanvas);
-resizeCanvas();
-
-function saveToHistory() {
-    historyStack.push(JSON.stringify(keyframes));
-    if(historyStack.length > 30) historyStack.shift();
-}
-
-function undo() {
-    if(isLocked()) return;
-    if(historyStack.length > 0) {
-        keyframes = JSON.parse(historyStack.pop());
-        selectedPoints = []; markUnsaved(); sync();
-    }
-}
+function saveToHistory() { historyStack.push(JSON.stringify(keyframes)); if(historyStack.length > 30) historyStack.shift(); }
+function undo() { if(isLocked()) return; if(historyStack.length > 0) { keyframes = JSON.parse(historyStack.pop()); selectedPoints = []; markUnsaved(); sync(); } }
 
 let modalResolve;
 function openModal(text, showInput=false){ 
@@ -161,25 +164,11 @@ document.getElementById("modalConfirm").onclick=()=>{
     if(modalResolve) modalResolve(val || true); 
 };
 
-function updatePlayButtonUI() {
-    const btn = document.getElementById("playBtn");
-    btn.innerText = isPaused ? "▶" : "⏸";
-}
-
-function togglePause() {
-    isPaused = !isPaused;
-    updatePlayButtonUI();
-    if(isPaused) pausedTime = (Date.now() - playStart) % keyframes[keyframes.length-1].time;
-    else playStart = Date.now() - pausedTime;
-    fetch('/toggle_pause?p=' + (isPaused ? "1" : "0"));
-}
-
-async function stopAndReset() {
-    isPaused = true; updatePlayButtonUI(); pausedTime = 0; playStart = Date.now();
-    fetch('/toggle_pause?p=1&reset=1');
-}
-
+function updatePlayButtonUI() { const btn = document.getElementById("playBtn"); btn.innerText = isPaused ? "▶" : "⏸"; }
+function togglePause() { isPaused = !isPaused; updatePlayButtonUI(); if(isPaused) pausedTime = (Date.now() - playStart) % keyframes[keyframes.length-1].time; else playStart = Date.now() - pausedTime; fetch('/toggle_pause?p=' + (isPaused ? "1" : "0")); }
+async function stopAndReset() { isPaused = true; updatePlayButtonUI(); pausedTime = 0; playStart = Date.now(); fetch('/toggle_pause?p=1&reset=1'); }
 function updateChaosLabel(){ document.getElementById("chaosVal").innerText = document.getElementById("chaosSlider").value + "%"; }
+
 const toX=(t)=>t*canvas.width/keyframes[keyframes.length-1].time;
 const toY=(v)=>canvas.height/2 - v*(canvas.height/2.2)/100;
 const fromX=(x)=>x*keyframes[keyframes.length-1].time/canvas.width;
@@ -192,31 +181,27 @@ function generateGhost() {
     ghostPoints = source.map((p, i) => {
         if (i === 0 || i === source.length - 1) return { ...p };
         const prevT = source[i-1].time, nextT = source[i+1].time;
-        const margin = (nextT - prevT) * 0.4 * chaos;
-        let newTime = Math.round(Math.max(prevT + 10, Math.min(nextT - 10, p.time + (Math.random() - 0.5) * margin * 2)));
-        let newValue = Math.max(-100, Math.min(100, p.value + (Math.random() - 0.5) * 25 * chaos));
+        // Verbeterde veiligheidsmarge: punt kan nooit over de buren heen springen
+        const safeSpanLeft = (p.time - prevT) * 0.9;
+        const safeSpanRight = (nextT - p.time) * 0.9;
+        const maxShiftT = Math.min(safeSpanLeft, safeSpanRight) * chaos;
+        
+        let newTime = Math.round(p.time + (Math.random() - 0.5) * maxShiftT * 2);
+        let newValue = Math.max(-100, Math.min(100, p.value + (Math.random() - 0.5) * 40 * chaos));
         return { time: newTime, value: newValue };
     });
 }
 
 function markUnsaved(){ isUnsaved=true; document.getElementById("unsavedWarning").style.display="inline-block"; originalKeyframes = JSON.parse(JSON.stringify(keyframes)); }
-
 function markSaved(name){ 
     isUnsaved = false; document.getElementById("unsavedWarning").style.display = "none"; 
     const sel = document.getElementById("presetSelect");
-    let found = false;
-    for(let i=0; i<sel.options.length; i++) {
-        if(sel.options[i].value === name) { sel.selectedIndex = i; found = true; break; }
-    }
-    if(!found) sel.selectedIndex = -1;
+    for(let i=0; i<sel.options.length; i++) { if(sel.options[i].value === name) sel.selectedIndex = i; }
     currentOpenFile = name; document.getElementById("currentFileDisplay").innerText = name ? " - " + name : "";
     originalKeyframes = JSON.parse(JSON.stringify(keyframes));
 }
 
-function getExportData() { 
-    return { chaos: parseInt(document.getElementById("chaosSlider").value), keyframes: keyframes.map(kp => ({time: Math.round(kp.time), value: Math.round(kp.value * 100) / 100})) }; 
-}
-
+function getExportData() { return { chaos: parseInt(document.getElementById("chaosSlider").value), keyframes: keyframes.map(kp => ({time: Math.round(kp.time), value: Math.round(kp.value * 100) / 100})) }; }
 function sync(skipGhost=false){ 
     const data = getExportData();
     editor.value = JSON.stringify(data, null, 2);
@@ -227,15 +212,10 @@ function sync(skipGhost=false){
 
 function draw(){
     ctx.clearRect(0,0,canvas.width,canvas.height);
-    const locked = isLocked();
-    canvas.style.cursor = locked ? "not-allowed" : "pointer";
-    document.getElementById("lockedStatus").innerText = locked ? "LOCKED: Druk eerst op ■ om te editen" : "";
     ctx.strokeStyle="#333"; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(0,canvas.height/2); ctx.lineTo(canvas.width,canvas.height/2); ctx.stroke();
     let dur=keyframes[keyframes.length-1].time, elapsed = isDraggingPlayhead ? manualTime : (isPaused ? pausedTime : (Date.now()-playStart)%dur);
     if (!isPaused && !isDraggingPlayhead && elapsed < lastElapsed) {
-        if(firstCycleDone && ghostPoints.length > 0) { 
-            keyframes = [...ghostPoints]; fetch('/set_live',{method:'POST',body:JSON.stringify(getExportData())}); 
-        }
+        if(firstCycleDone && ghostPoints.length > 0) { keyframes = [...ghostPoints]; fetch('/set_live',{method:'POST',body:JSON.stringify(getExportData())}); }
         firstCycleDone = true; generateGhost();
     }
     lastElapsed = elapsed;
@@ -260,7 +240,6 @@ function draw(){
 }
 
 canvas.onmousedown=(e)=>{
-    if(e.button === 2) { selectedPoints = []; return; }
     const rect=canvas.getBoundingClientRect(), x=(e.clientX-rect.left)*(canvas.width/rect.width), y=e.clientY-rect.top;
     let dur=keyframes[keyframes.length-1].time, currentPos = isPaused ? pausedTime : (Date.now()-playStart)%dur;
     if(Math.abs(x - toX(currentPos)) < 30) { isDraggingPlayhead = true; manualTime = currentPos; return; }
@@ -276,10 +255,10 @@ canvas.onmousedown=(e)=>{
 };
 
 window.onmousemove=(e)=>{
-    const rect=canvas.getBoundingClientRect(), x=(e.clientX-rect.left)*(canvas.width/rect.width), y=e.clientY-rect.top;
-    if(isDraggingPlayhead) { manualTime = Math.max(0, Math.min(keyframes[keyframes.length-1].time, fromX(x))); return; }
-    if(isSelectingBox) { boxEnd = {x, y}; if(Math.hypot(x-boxStart.x, y-boxStart.y) > 5) hasMovedForBox = true; return; }
+    if(isDraggingPlayhead) { const rect=canvas.getBoundingClientRect(), x=(e.clientX-rect.left)*(canvas.width/rect.width); manualTime = Math.max(0, Math.min(keyframes[keyframes.length-1].time, fromX(x))); return; }
+    if(isSelectingBox) { const rect=canvas.getBoundingClientRect(), x=(e.clientX-rect.left)*(canvas.width/rect.width), y=e.clientY-rect.top; boxEnd = {x, y}; if(Math.hypot(x-boxStart.x, y-boxStart.y) > 5) hasMovedForBox = true; return; }
     if(!draggingPoint || isLocked()) return;
+    const rect=canvas.getBoundingClientRect(), x=(e.clientX-rect.left)*(canvas.width/rect.width), y=e.clientY-rect.top;
     const dx = fromX(x) - fromX(lastMouseX), dy = fromY(y) - fromY(lastMouseY);
     let canMoveX = true;
     selectedPoints.forEach(p => {
@@ -345,7 +324,7 @@ async function autoLoadPreset(targetName){
 async function updatePresetList(targetName){
     const res = await fetch('/list'), list = await res.json(), sel = document.getElementById("presetSelect"); sel.innerHTML = "";
     list.forEach(f=>{ let o=document.createElement("option"); o.value=o.textContent=f; if(f === targetName) o.selected = true; sel.appendChild(o); });
-    if(!targetName || !list.includes(targetName)) sel.selectedIndex = -1; return list;
+    if(!targetName) sel.selectedIndex = -1; return list;
 }
 
 async function deletePreset(){
@@ -388,9 +367,7 @@ async function init(){
     const data = await dataRes.json(), activeName = await nameRes.text(), list = await listRes.json();
     isPaused = (await pauseRes.text() == "1"); updatePlayButtonUI();
     keyframes = data.keyframes || data; document.getElementById("chaosSlider").value = data.chaos || 0; updateChaosLabel();
-    const validatedName = list.includes(activeName) ? activeName : (list.length > 0 ? list[0] : "");
-    await updatePresetList(validatedName);
-    if(validatedName && validatedName !== activeName) autoLoadPreset(validatedName); else markSaved(validatedName);
+    const validatedName = list.includes(activeName) ? activeName : ""; await updatePresetList(validatedName); markSaved(validatedName);
     playStart = Date.now() - parseInt(await (await fetch('/get_time')).text()); sync(true); draw();
 }
 init();
@@ -426,19 +403,7 @@ void setup() {
     File f3 = LittleFS.open("/active_name.txt", "w"); f3.print(name); f3.close(); server.send(200);
   });
   server.on("/load", HTTP_GET, [](){ String name = server.arg("name"); File f = LittleFS.open("/" + name + ".json", "r"); if(f){ server.send(200, "application/json", f.readString()); f.close(); } else server.send(404); });
-  
-  server.on("/delete", HTTP_DELETE, [](){ 
-    String name = server.arg("name"); 
-    if(LittleFS.exists("/"+name+".json")) LittleFS.remove("/"+name+".json");
-    // Extra check: was dit het actieve bestand?
-    if (LittleFS.exists("/active_name.txt")) {
-       File f = LittleFS.open("/active_name.txt", "r");
-       String active = f.readString(); f.close();
-       if(active == name) LittleFS.remove("/active_name.txt");
-    }
-    server.send(200); 
-  });
-
+  server.on("/delete", HTTP_DELETE, [](){ String name = server.arg("name"); if(LittleFS.exists("/"+name+".json")) LittleFS.remove("/"+name+".json"); server.send(200); });
   server.on("/list", HTTP_GET, [](){
     String list = "["; File root = LittleFS.open("/"); File file = root.openNextFile();
     while (file) { String n = file.name(); if (n.endsWith(".json") && n != "active.json") { if (list != "[") list += ","; list += "\"" + n.substring(0, n.length() - 5) + "\""; } file = root.openNextFile(); }
