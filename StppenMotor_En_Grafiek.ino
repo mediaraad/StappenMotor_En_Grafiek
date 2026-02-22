@@ -55,9 +55,21 @@ const char* htmlPage PROGMEM = R"rawliteral(
   #canvasContainer { width: 100%; max-width: 1200px; margin: 20px auto; position: relative; }
   canvas { background: #1e1e1e; border: 2px solid var(--border); cursor: pointer; touch-action: none; display: block; width: 100%; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); outline: none; }
   
-  .controls { background: var(--bg-panel); padding: 15px; border-radius: 8px; display: flex; flex-direction: column; align-items: center; gap: 12px; margin: 0 auto; border: 1px solid var(--border); max-width: 1200px; box-sizing: border-box; box-shadow: 0 2px 10px rgba(0,0,0,0.3); }
+  .controls { background: var(--bg-panel); padding: 15px; border-radius: 8px; display: flex; flex-direction: column; align-items: center; gap: 12px; margin: 0 auto; border: 1px solid var(--border); max-width: 1200px; box-sizing: border-box; box-shadow: 0 2px 10px rgba(0,0,0,0.3); transition: box-shadow 0.3s ease; }
   .control-row { display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; }
   
+  /* Rood gloei effect voor niet opgeslagen wijzigingen */
+  .unsaved-glow { 
+    border-color: var(--danger) !important;
+    box-shadow: 0 0 15px rgba(255, 68, 68, 0.4);
+    animation: pulse-red 2s infinite;
+  }
+  @keyframes pulse-red {
+    0% { box-shadow: 0 0 5px rgba(255, 68, 68, 0.2); }
+    50% { box-shadow: 0 0 20px rgba(255, 68, 68, 0.6); }
+    100% { box-shadow: 0 0 5px rgba(255, 68, 68, 0.2); }
+  }
+
   input, button, select { height: 42px; padding: 0 10px; border-radius: 4px; border: none; background: var(--border); color: white; outline: none; font-size: 14px; transition: 0.2s; font-weight: normal; }
   button { background: var(--accent); cursor: pointer; }
   button:hover { background: var(--accent-hover); transform: translateY(-1px); }
@@ -68,16 +80,13 @@ const char* htmlPage PROGMEM = R"rawliteral(
   .btn-play { background: var(--success) !important; width: 50px; }
   .btn-stop { background: #ffc107 !important; color: black !important; width: 50px; }
 
-  .status-line { height: 20px; margin-top: 10px; }
-  .unsaved-text { color: var(--warning); font-size: 13px; display: none; }
   #currentFileDisplay { color: #00ff00; margin-left: 10px; }
   
   textarea { width: 100%; max-width: 1200px; height: 120px; background: #1e1e1e; color: #00ff00; border: 1px solid var(--border); font-family: monospace; margin: 20px auto 0 auto; padding: 10px; border-radius: 8px; box-sizing: border-box; display: block; }
   .slider-group { display: flex; align-items: center; gap: 5px; background: #333; padding: 0 10px; border-radius: 4px; height: 42px; }
   
-  /* Blokkeer klassen */
   .locked-ui { opacity: 0.5; pointer-events: none; filter: grayscale(50%); }
-  .locked-canvas { pointer-events: none; } /* Canvas blijft helder, maar niet klikbaar */
+  .locked-canvas { pointer-events: none; }
 
   label { font-size: 14px; }
   #customModal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); backdrop-filter: blur(5px); }
@@ -85,9 +94,9 @@ const char* htmlPage PROGMEM = R"rawliteral(
 </style>
 </head>
 <body>
-    <h2>Motor Control Pro <span id="currentFileDisplay"></span></h2>
+    <h2 style="margin-bottom:10px;">Motor Control Pro <span id="currentFileDisplay"></span></h2>
     
-    <div class="controls">
+    <div id="mainControls" class="controls">
         <div id="fileControls" class="control-row">
             <button onclick="createNew()" class="btn-new" title="Nieuwe configuratie">➕</button>
             <select id="presetSelect" onchange="autoLoadPreset()"></select>
@@ -115,8 +124,6 @@ const char* htmlPage PROGMEM = R"rawliteral(
             <input type="number" id="totalTime" value="8" min="0.1" step="0.1" style="width:70px;" onchange="updateDuration()">
         </div>
     </div>
-
-    <div class="status-line"><span id="unsavedWarning" class="unsaved-text">⚠️ NIET OPGESLAGEN</span></div>
     
     <div id="canvasContainer">
         <canvas id="envelopeCanvas" height="400" tabindex="1"></canvas>
@@ -224,9 +231,15 @@ function generateGhost() {
     });
 }
 
-function markUnsaved(){ isUnsaved=true; document.getElementById("unsavedWarning").style.display="inline-block"; originalKeyframes = JSON.parse(JSON.stringify(keyframes)); }
+function markUnsaved(){ 
+    isUnsaved=true; 
+    document.getElementById("mainControls").classList.add("unsaved-glow");
+    originalKeyframes = JSON.parse(JSON.stringify(keyframes)); 
+}
+
 function markSaved(name){ 
-    isUnsaved = false; document.getElementById("unsavedWarning").style.display = "none"; 
+    isUnsaved = false; 
+    document.getElementById("mainControls").classList.remove("unsaved-glow");
     const sel = document.getElementById("presetSelect");
     for(let i=0; i<sel.options.length; i++) { if(sel.options[i].value === name) sel.selectedIndex = i; }
     currentOpenFile = name; document.getElementById("currentFileDisplay").innerText = name ? " - " + name : "";
