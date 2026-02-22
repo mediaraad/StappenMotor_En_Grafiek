@@ -37,7 +37,7 @@ const char* htmlPage PROGMEM = R"rawliteral(
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Stepper Pro v22.4 - Auto-Play</title>
+<title>Stepper Pro v22.6 - Auto-Play</title>
 <style>
   :root {
     --bg-dark: #121212;
@@ -75,8 +75,10 @@ const char* htmlPage PROGMEM = R"rawliteral(
   textarea { width: 100%; max-width: 1200px; height: 120px; background: #1e1e1e; color: #00ff00; border: 1px solid var(--border); font-family: monospace; margin: 20px auto 0 auto; padding: 10px; border-radius: 8px; box-sizing: border-box; display: block; }
   .slider-group { display: flex; align-items: center; gap: 5px; background: #333; padding: 0 10px; border-radius: 4px; height: 42px; }
   
-  label { font-size: 14px; }
+  /* Blokkeer klassen */
+  .locked { opacity: 0.5; pointer-events: none; filter: grayscale(50%); }
 
+  label { font-size: 14px; }
   #customModal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); backdrop-filter: blur(5px); }
   .modal-content { background: var(--bg-panel); margin: 15% auto; padding: 30px; border: 1px solid var(--accent); width: 300px; border-radius: 16px; }
 </style>
@@ -85,7 +87,7 @@ const char* htmlPage PROGMEM = R"rawliteral(
     <h2>Motor Control Pro <span id="currentFileDisplay"></span></h2>
     
     <div class="controls">
-        <div class="control-row">
+        <div id="fileControls" class="control-row">
             <button onclick="createNew()" class="btn-new" title="Nieuwe configuratie">➕</button>
             <select id="presetSelect" onchange="autoLoadPreset()"></select>
             <button onclick="deletePreset()" class="btn-delete" title="Verwijder preset">🗑️</button>
@@ -138,10 +140,18 @@ let keyframes=[{time:0,value:0},{time:8000,value:0}], originalKeyframes=[];
 let selectedPoints=[];
 let draggingPoint=null, lastMouseX=0, lastMouseY=0, historyStack = [];
 let playStart=Date.now(), isUnsaved=false, currentOpenFile="";
-let isDraggingPlayhead = false, manualTime = 0, ghostPoints = [], lastElapsed = 0, firstCycleDone = false, pausedTime = 0, isPaused = false; 
+let ghostPoints = [], lastElapsed = 0, firstCycleDone = false, pausedTime = 0, isPaused = false; 
 let isSelectingBox = false, hasMovedForBox = false, boxStart = {x:0, y:0}, boxEnd = {x:0, y:0};
 
-function isLocked() { return !isPaused || pausedTime !== 0; }
+function isLocked() { return !isPaused; }
+
+function updateUIState() {
+    const isPlaying = !isPaused;
+    document.getElementById("fileControls").classList.toggle("locked", isPlaying);
+    document.getElementById("envelopeCanvas").classList.toggle("locked", isPlaying);
+    document.getElementById("jsonEditor").classList.toggle("locked", isPlaying);
+}
+
 function resizeCanvas() { const container = document.getElementById("canvasContainer"); canvas.width = container.clientWidth; }
 window.addEventListener('resize', resizeCanvas); resizeCanvas();
 
@@ -164,8 +174,19 @@ document.getElementById("modalConfirm").onclick=()=>{
     if(modalResolve) modalResolve(val || true); 
 };
 
-function updatePlayButtonUI() { const btn = document.getElementById("playBtn"); btn.innerText = isPaused ? "▶" : "⏸"; }
-function togglePause() { isPaused = !isPaused; updatePlayButtonUI(); if(isPaused) pausedTime = (Date.now() - playStart) % keyframes[keyframes.length-1].time; else playStart = Date.now() - pausedTime; fetch('/toggle_pause?p=' + (isPaused ? "1" : "0")); }
+function updatePlayButtonUI() { 
+    const btn = document.getElementById("playBtn"); 
+    btn.innerText = isPaused ? "▶" : "⏸"; 
+    updateUIState();
+}
+
+function togglePause() { 
+    isPaused = !isPaused; 
+    updatePlayButtonUI(); 
+    if(isPaused) pausedTime = (Date.now() - playStart) % keyframes[keyframes.length-1].time; 
+    else playStart = Date.now() - pausedTime; 
+    fetch('/toggle_pause?p=' + (isPaused ? "1" : "0")); 
+}
 
 async function stopAndReset() { 
     isPaused = true; 
@@ -223,8 +244,8 @@ function sync(skipGhost=false){
 function draw(){
     ctx.clearRect(0,0,canvas.width,canvas.height);
     ctx.strokeStyle="#333"; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(0,canvas.height/2); ctx.lineTo(canvas.width,canvas.height/2); ctx.stroke();
-    let dur=keyframes[keyframes.length-1].time, elapsed = isDraggingPlayhead ? manualTime : (isPaused ? pausedTime : (Date.now()-playStart)%dur);
-    if (!isPaused && !isDraggingPlayhead && elapsed < lastElapsed) {
+    let dur=keyframes[keyframes.length-1].time, elapsed = (isPaused ? pausedTime : (Date.now()-playStart)%dur);
+    if (!isPaused && elapsed < lastElapsed) {
         if(firstCycleDone && ghostPoints.length > 0) { keyframes = [...ghostPoints]; fetch('/set_live',{method:'POST',body:JSON.stringify(getExportData())}); }
         firstCycleDone = true; generateGhost();
     }
@@ -250,10 +271,8 @@ function draw(){
 }
 
 canvas.onmousedown=(e)=>{
-    const rect=canvas.getBoundingClientRect(), x=(e.clientX-rect.left)*(canvas.width/rect.width), y=e.clientY-rect.top;
-    let dur=keyframes[keyframes.length-1].time, currentPos = isPaused ? pausedTime : (Date.now()-playStart)%dur;
-    if(Math.abs(x - toX(currentPos)) < 30) { isDraggingPlayhead = true; manualTime = currentPos; return; }
     if(isLocked()) return; 
+    const rect=canvas.getBoundingClientRect(), x=(e.clientX-rect.left)*(canvas.width/rect.width), y=e.clientY-rect.top;
     lastMouseX = x; lastMouseY = y;
     let hit = keyframes.find(p=>Math.hypot(toX(p.time)-x,toY(p.value)-y)<15);
     if(hit) {
@@ -265,7 +284,6 @@ canvas.onmousedown=(e)=>{
 };
 
 window.onmousemove=(e)=>{
-    if(isDraggingPlayhead) { const rect=canvas.getBoundingClientRect(), x=(e.clientX-rect.left)*(canvas.width/rect.width); manualTime = Math.max(0, Math.min(keyframes[keyframes.length-1].time, fromX(x))); return; }
     if(isSelectingBox) { const rect=canvas.getBoundingClientRect(), x=(e.clientX-rect.left)*(canvas.width/rect.width), y=e.clientY-rect.top; boxEnd = {x, y}; if(Math.hypot(x-boxStart.x, y-boxStart.y) > 5) hasMovedForBox = true; return; }
     if(!draggingPoint || isLocked()) return;
     const rect=canvas.getBoundingClientRect(), x=(e.clientX-rect.left)*(canvas.width/rect.width), y=e.clientY-rect.top;
@@ -282,7 +300,6 @@ window.onmousemove=(e)=>{
 };
 
 window.onmouseup=(e)=>{ 
-    if(isDraggingPlayhead) { if(isPaused) pausedTime = manualTime; else playStart = Date.now() - manualTime; fetch('/reset_clock_to?t=' + Math.round(manualTime)); } 
     if(isSelectingBox) {
         if(!hasMovedForBox) {
             saveToHistory(); const rect=canvas.getBoundingClientRect(), x=(e.clientX-rect.left)*(canvas.width/rect.width), y=e.clientY-rect.top;
@@ -295,7 +312,7 @@ window.onmouseup=(e)=>{
         }
         isSelectingBox = false;
     }
-    draggingPoint=null; isDraggingPlayhead = false; 
+    draggingPoint=null; 
 };
 
 window.onkeydown=(e)=>{
@@ -324,7 +341,7 @@ window.onkeydown=(e)=>{
 
 async function autoLoadPreset(targetName){
     const name = targetName || document.getElementById("presetSelect").value;
-    if(!name || name === "") return;
+    if(!name || name === "" || isLocked()) return;
     if(isUnsaved && !targetName && !await openModal("Wijzigingen gaan verloren. Doorgaan?")){ document.getElementById("presetSelect").value = currentOpenFile || ""; return; }
     const res = await fetch('/load?name='+name); if(!res.ok) return;
     const data = await res.json(); keyframes = data.keyframes || data; document.getElementById("chaosSlider").value = data.chaos || 0;
@@ -339,18 +356,19 @@ async function updatePresetList(targetName){
 
 async function deletePreset(){
     const name = document.getElementById("presetSelect").value;
-    if(!name || name === "" || !await openModal("Verwijder '"+name+"' definitief?")) return;
+    if(!name || name === "" || isLocked() || !await openModal("Verwijder '"+name+"' definitief?")) return;
     await fetch('/delete?name='+name, {method:'DELETE'});
     currentOpenFile = ""; const newList = await updatePresetList();
     if(newList.length > 0) autoLoadPreset(newList[0]); else createNew();
 }
 
-function createNew(){ keyframes=[{time:0,value:0},{time:8000,value:0}]; selectedPoints=[]; historyStack=[]; markSaved(""); updatePresetList(); sync(true); stopAndReset(); }
+function createNew(){ if(isLocked()) return; keyframes=[{time:0,value:0},{time:8000,value:0}]; selectedPoints=[]; historyStack=[]; markSaved(""); updatePresetList(); sync(true); stopAndReset(); }
 function performSave(n){ fetch('/save?name='+n,{method:'POST',body:JSON.stringify(getExportData())}).then(()=>{markSaved(n);updatePresetList(n);}); }
-async function saveCurrent(){ if(!currentOpenFile) saveAs(); else if(await openModal("Bestand '" + currentOpenFile + "' overschrijven?")) performSave(currentOpenFile); }
-async function saveAs(){ let n=await openModal("Sla configuratie op als:", true); if(n && typeof n === 'string') performSave(n.trim().replace(/[^a-z0-9_-]/gi,'_')); }
+async function saveCurrent(){ if(isLocked()) return; if(!currentOpenFile) saveAs(); else if(await openModal("Bestand '" + currentOpenFile + "' overschrijven?")) performSave(currentOpenFile); }
+async function saveAs(){ if(isLocked()) return; let n=await openModal("Sla configuratie op als:", true); if(n && typeof n === 'string') performSave(n.trim().replace(/[^a-z0-9_-]/gi,'_')); }
 
 async function handleFileUpload(event){
+    if(isLocked()) return;
     const file=event.target.files[0]; if(!file) return;
     const reader=new FileReader();
     reader.onload=async (ev)=>{
@@ -367,7 +385,7 @@ async function handleFileUpload(event){
 
 function downloadConfig(){ const a=document.createElement('a'); a.href="data:text/json;charset=utf-8,"+encodeURIComponent(JSON.stringify(getExportData(),null,2)); a.download=(currentOpenFile || "config")+".json"; a.click(); }
 function updateDuration(){ 
-    if(!isLocked()) saveToHistory(); const oldDur = keyframes[keyframes.length-1].time, newDur = document.getElementById("totalTime").value * 1000;
+    saveToHistory(); const oldDur = keyframes[keyframes.length-1].time, newDur = document.getElementById("totalTime").value * 1000;
     const factor = newDur / oldDur; keyframes.forEach(p => { p.time = Math.round(p.time * factor); }); markUnsaved(); sync(); 
 }
 function applyJson(){ if(isLocked()) return; try{const data=JSON.parse(editor.value); keyframes=data.keyframes || data; markUnsaved(); sync();}catch(e){} }
