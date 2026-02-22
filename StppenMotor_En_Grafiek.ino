@@ -109,7 +109,7 @@ const char* htmlPage PROGMEM = R"rawliteral(
             <button onclick="stopAndReset()" class="btn-stop">■</button>
             <span style="border-left:1px solid var(--border);height:30px;"></span>
             <label>Duur (sec):</label>
-            <input type="number" id="totalTime" value="8" min="1" style="width:55px;" onchange="updateDuration()">
+            <input type="number" id="totalTime" value="8" min="0.1" step="0.1" style="width:70px;" onchange="updateDuration()">
         </div>
     </div>
 
@@ -215,7 +215,7 @@ function getExportData() { return { chaos: parseInt(document.getElementById("cha
 function sync(skipGhost=false){ 
     const data = getExportData();
     editor.value = JSON.stringify(data, null, 2);
-    document.getElementById("totalTime").value = Math.round(keyframes[keyframes.length-1].time/1000);
+    document.getElementById("totalTime").value = (keyframes[keyframes.length-1].time/1000).toFixed(1);
     if(firstCycleDone && !skipGhost) generateGhost();
     return fetch('/set_live', {method:'POST', body:JSON.stringify(data)}); 
 }
@@ -401,12 +401,11 @@ void setup() {
   for (int i = 0; i < 4; i++) pinMode(motorPins[i], OUTPUT); 
   LittleFS.begin(true);
 
-  // LAAD LAATSTE CONFIG EN START MOTOR DIRECT
   if (LittleFS.exists("/active.json")) {
     loadFromJSON(LittleFS.open("/active.json", "r").readString());
   }
   
-  isPaused = false; // DIRECT STARTEN NA REBOOT
+  isPaused = false; 
   startTime = millis();
 
   WiFi.mode(WIFI_AP_STA); WiFi.softAP(ap_ssid, ap_pass); WiFi.begin(ssid_home, pass_home); MDNS.begin(mdns_name);
