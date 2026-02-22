@@ -76,7 +76,8 @@ const char* htmlPage PROGMEM = R"rawliteral(
   .slider-group { display: flex; align-items: center; gap: 5px; background: #333; padding: 0 10px; border-radius: 4px; height: 42px; }
   
   /* Blokkeer klassen */
-  .locked { opacity: 0.5; pointer-events: none; filter: grayscale(50%); }
+  .locked-ui { opacity: 0.5; pointer-events: none; filter: grayscale(50%); }
+  .locked-canvas { pointer-events: none; } /* Canvas blijft helder, maar niet klikbaar */
 
   label { font-size: 14px; }
   #customModal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); backdrop-filter: blur(5px); }
@@ -147,9 +148,9 @@ function isLocked() { return !isPaused; }
 
 function updateUIState() {
     const isPlaying = !isPaused;
-    document.getElementById("fileControls").classList.toggle("locked", isPlaying);
-    document.getElementById("envelopeCanvas").classList.toggle("locked", isPlaying);
-    document.getElementById("jsonEditor").classList.toggle("locked", isPlaying);
+    document.getElementById("fileControls").classList.toggle("locked-ui", isPlaying);
+    document.getElementById("jsonEditor").classList.toggle("locked-ui", isPlaying);
+    document.getElementById("envelopeCanvas").classList.toggle("locked-canvas", isPlaying);
 }
 
 function resizeCanvas() { const container = document.getElementById("canvasContainer"); canvas.width = container.clientWidth; }
