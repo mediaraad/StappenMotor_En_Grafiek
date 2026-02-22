@@ -37,7 +37,7 @@ const char* htmlPage PROGMEM = R"rawliteral(
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Stepper Pro v22.7 - Smart Reset</title>
+<title>Stepper Pro v22.8.2 - Smart Reset Fix</title>
 <style>
   :root {
     --bg-dark: #121212;
@@ -144,8 +144,7 @@ const char* htmlPage PROGMEM = R"rawliteral(
 <script>
 const canvas=document.getElementById("envelopeCanvas"), ctx=canvas.getContext("2d"), editor=document.getElementById("jsonEditor");
 let keyframes=[{time:0,value:0},{time:8000,value:0}];
-let originalKeyframes=[]; // Bron voor reset waarden
-let referenceKeyframes=[]; // Groene lijn
+let referenceKeyframes=[]; // De 'Groene Lijn' en bron voor Reset
 let selectedPoints=[];
 let draggingPoint=null, lastMouseX=0, lastMouseY=0, historyStack = [];
 let playStart=Date.now(), isUnsaved=false, currentOpenFile="";
@@ -203,11 +202,9 @@ async function stopAndReset() {
     pausedTime = 0; 
     playStart = Date.now(); 
     
-    // Reset waarden punten (Y-as), maar behoud huidige tijden (X-as)
-    if(originalKeyframes.length > 0) {
-        keyframes.forEach((kp, i) => {
-            if(originalKeyframes[i]) kp.value = originalKeyframes[i].value;
-        });
+    // De FIX: Reset de oranje punten (keyframes) direct naar de groene lijn (referenceKeyframes)
+    if(referenceKeyframes.length > 0) {
+        keyframes = JSON.parse(JSON.stringify(referenceKeyframes));
     }
     
     ghostPoints = [];
@@ -226,7 +223,8 @@ const fromY=(y)=>(canvas.height/2 - y)*100/(canvas.height/2.2);
 function generateGhost() {
     const chaos = document.getElementById("chaosSlider").value / 100;
     if(chaos <= 0 || isPaused) { ghostPoints = []; return; }
-    const source = originalKeyframes.length > 0 ? originalKeyframes : keyframes;
+    // Gebruik altijd de reference (groene lijn) als basis voor chaos
+    const source = referenceKeyframes.length > 0 ? referenceKeyframes : keyframes;
     ghostPoints = source.map((p, i) => {
         if (i === 0 || i === source.length - 1) return { ...p };
         const prevT = source[i-1].time, nextT = source[i+1].time;
@@ -250,7 +248,7 @@ function markSaved(name){
     const sel = document.getElementById("presetSelect");
     for(let i=0; i<sel.options.length; i++) { if(sel.options[i].value === name) sel.selectedIndex = i; }
     currentOpenFile = name; document.getElementById("currentFileDisplay").innerText = name ? " - " + name : "";
-    originalKeyframes = JSON.parse(JSON.stringify(keyframes));
+    // Bij opslaan of laden wordt de huidige staat de nieuwe Groene Referentielijn
     referenceKeyframes = JSON.parse(JSON.stringify(keyframes));
 }
 
@@ -259,7 +257,7 @@ function getExportData() { return { chaos: parseInt(document.getElementById("cha
 function sync(skipGhost=false){ 
     const data = getExportData();
     editor.value = JSON.stringify(data, null, 2);
-    document.getElementById("totalTime").value = (keyframes[keyframes.length-1].time/1000).toFixed(1);
+    document.getElementById("totalTime").value = (keyframes[keyframes.length-1].time/1000).toFixed(2);
     if(firstCycleDone && !skipGhost) generateGhost();
     return fetch('/set_live', {method:'POST', body:JSON.stringify(data)}); 
 }
@@ -275,9 +273,9 @@ function draw(){
     }
     lastElapsed = elapsed;
 
-    // Groene lijn
+    // Teken de groene referentielijn
     if (referenceKeyframes.length > 1) {
-        ctx.strokeStyle="rgba(40, 167, 69, 0.4)"; ctx.lineWidth=2; ctx.beginPath();
+        ctx.strokeStyle="rgba(40, 167, 69, 0.5)"; ctx.lineWidth=2; ctx.beginPath();
         referenceKeyframes.forEach((p,i)=> i?ctx.lineTo(toX(p.time),toY(p.value)):ctx.moveTo(toX(p.time),toY(p.value))); ctx.stroke();
     }
 
@@ -327,8 +325,8 @@ window.onmousemove=(e)=>{
     selectedPoints.forEach(p => {
         let idx = keyframes.indexOf(p), newT = p.time + dx;
         if(idx === 0 || idx === keyframes.length-1) canMoveX = false;
-        if(idx > 0 && !selectedPoints.includes(keyframes[idx-1]) && newT <= keyframes[idx-1].time + 10) canMoveX = false;
-        if(idx < keyframes.length-1 && !selectedPoints.includes(keyframes[idx+1]) && newT >= keyframes[idx+1].time - 10) canMoveX = false;
+        if(idx > 0 && !selectedPoints.includes(keyframes[idx-1]) && newT <= keyframes[idx-1].time + 1) canMoveX = false;
+        if(idx < keyframes.length-1 && !selectedPoints.includes(keyframes[idx+1]) && newT >= keyframes[idx+1].time - 1) canMoveX = false;
     });
     selectedPoints.forEach(p => { if(canMoveX) p.time = Math.round(p.time + dx); p.value = Math.max(-100, Math.min(100, p.value + dy)); });
     lastMouseX = x; lastMouseY = y; keyframes.sort((a,b)=>a.time-b.time); markUnsaved(); sync();
@@ -367,8 +365,14 @@ window.onkeydown=(e)=>{
         selectedPoints = []; changed = true;
     }
     if(key === "y" || key === "x") {
-        saveToHistory(); const avg = key === "y" ? Math.round(selectedPoints.reduce((a,p)=>a+p.time,0)/selectedPoints.length) : selectedPoints.reduce((a,p)=>a+p.value,0)/selectedPoints.length;
-        selectedPoints.forEach(p => { if(key === "y") { if(keyframes.indexOf(p)>0 && keyframes.indexOf(p)<keyframes.length-1) p.time = avg; } else p.value = avg; });
+        saveToHistory();
+        if(key === "y") { 
+            const avg = Math.round(selectedPoints.reduce((a,p)=>a+p.time,0)/selectedPoints.length);
+            selectedPoints.forEach(p => { if(keyframes.indexOf(p)>0 && keyframes.indexOf(p)<keyframes.length-1) p.time = avg; });
+        } else {
+            const avg = selectedPoints.reduce((a,p)=>a+p.value,0)/selectedPoints.length;
+            selectedPoints.forEach(p => p.value = avg);
+        }
         changed = true;
     }
     if(changed) { e.preventDefault(); keyframes.sort((a,b)=>a.time-b.time); markUnsaved(); sync(); }
@@ -381,7 +385,7 @@ async function autoLoadPreset(targetName){
     const res = await fetch('/load?name='+name); if(!res.ok) return;
     const data = await res.json(); 
     keyframes = data.keyframes || data; 
-    markSaved(name); // Dit stelt ook original en reference in
+    markSaved(name);
     document.getElementById("chaosSlider").value = data.chaos || 0;
     updateChaosLabel(); firstCycleDone = false; ghostPoints = []; selectedPoints = []; historyStack = []; await sync(true); stopAndReset();
 }
@@ -427,14 +431,10 @@ function downloadConfig(){ const a=document.createElement('a'); a.href="data:tex
 function updateDuration(){ 
     saveToHistory(); 
     const oldDur = keyframes[keyframes.length-1].time;
-    const newDur = document.getElementById("totalTime").value * 1000;
+    const newDur = Math.round(document.getElementById("totalTime").value * 1000);
     const factor = newDur / oldDur;
-    
-    // Schaalt alles qua tijd
     keyframes.forEach(p => { p.time = Math.round(p.time * factor); }); 
-    originalKeyframes.forEach(p => { p.time = Math.round(p.time * factor); }); 
     referenceKeyframes.forEach(p => { p.time = Math.round(p.time * factor); }); 
-    
     markUnsaved(); 
     sync(); 
 }
@@ -472,22 +472,17 @@ void setup() {
   Serial.begin(115200); 
   for (int i = 0; i < 4; i++) pinMode(motorPins[i], OUTPUT); 
   LittleFS.begin(true);
-
   if (LittleFS.exists("/active.json")) {
     loadFromJSON(LittleFS.open("/active.json", "r").readString());
   }
-  
   isPaused = false; 
   startTime = millis();
-
   WiFi.mode(WIFI_AP_STA); WiFi.softAP(ap_ssid, ap_pass); WiFi.begin(ssid_home, pass_home); MDNS.begin(mdns_name);
-  
   server.on("/", [](){ server.send(200, "text/html", htmlPage); });
   server.on("/get_time", [](){ server.send(200, "text/plain", String((millis() - startTime) % loopDuration)); });
   server.on("/get_pause_state", [](){ server.send(200, "text/plain", isPaused ? "1" : "0"); });
   server.on("/toggle_pause", [](){ if(server.hasArg("p")) isPaused = (server.arg("p") == "1"); if(server.hasArg("reset")) { startTime = millis(); currentSegment = 0; } server.send(200); });
   server.on("/set_live", HTTP_POST, [](){ if(server.hasArg("plain")) { loadFromJSON(server.arg("plain")); File f = LittleFS.open("/active.json", "w"); f.print(server.arg("plain")); f.close(); } server.send(200); });
-  
   server.on("/save", HTTP_POST, [](){
     String name = server.arg("name"), data = server.arg("plain");
     File f1 = LittleFS.open("/" + name + ".json", "w"); f1.print(data); f1.close();
@@ -495,20 +490,16 @@ void setup() {
     File f3 = LittleFS.open("/active_name.txt", "w"); f3.print(name); f3.close(); 
     server.send(200);
   });
-
   server.on("/load", HTTP_GET, [](){ String name = server.arg("name"); File f = LittleFS.open("/" + name + ".json", "r"); if(f){ server.send(200, "application/json", f.readString()); f.close(); } else server.send(404); });
   server.on("/delete", HTTP_DELETE, [](){ String name = server.arg("name"); if(LittleFS.exists("/"+name+".json")) LittleFS.remove("/"+name+".json"); server.send(200); });
-  
   server.on("/list", HTTP_GET, [](){
     String list = "["; File root = LittleFS.open("/"); File file = root.openNextFile();
     while (file) { String n = file.name(); if (n.endsWith(".json") && n != "active.json") { if (list != "[") list += ","; list += "\"" + n.substring(0, n.length() - 5) + "\""; } file = root.openNextFile(); }
     list += "]"; server.send(200, "application/json", list);
   });
-
   server.on("/get_active", HTTP_GET, [](){ File f = LittleFS.open("/active.json", "r"); if(f) { server.send(200, "application/json", f.readString()); f.close(); } else server.send(200, "application/json", "{\"chaos\":0,\"keyframes\":[{\"time\":0,\"value\":0},{\"time\":8000,\"value\":0}]}"); });
   server.on("/get_active_name", HTTP_GET, [](){ if (LittleFS.exists("/active_name.txt")) { File f = LittleFS.open("/active_name.txt", "r"); String n = f.readString(); f.close(); server.send(200, "text/plain", n); } else server.send(200, "text/plain", ""); });
   server.on("/reset_clock_to", [](){ if(server.hasArg("t")) { startTime = millis() - server.arg("t").toInt(); currentSegment = 0; } server.send(200); });
-  
   server.begin();
 }
 
