@@ -37,7 +37,7 @@ const char* htmlPage PROGMEM = R"rawliteral(
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Stepper Pro v22.8.2 - Smart Reset Fix</title>
+<title>Stepper Pro v22.8.5 - Reboot Menu Fix</title>
 <style>
   :root {
     --bg-dark: #121212;
@@ -144,7 +144,7 @@ const char* htmlPage PROGMEM = R"rawliteral(
 <script>
 const canvas=document.getElementById("envelopeCanvas"), ctx=canvas.getContext("2d"), editor=document.getElementById("jsonEditor");
 let keyframes=[{time:0,value:0},{time:8000,value:0}];
-let referenceKeyframes=[]; // De 'Groene Lijn' en bron voor Reset
+let referenceKeyframes=[]; 
 let selectedPoints=[];
 let draggingPoint=null, lastMouseX=0, lastMouseY=0, historyStack = [];
 let playStart=Date.now(), isUnsaved=false, currentOpenFile="";
@@ -201,12 +201,9 @@ async function stopAndReset() {
     updatePlayButtonUI(); 
     pausedTime = 0; 
     playStart = Date.now(); 
-    
-    // De FIX: Reset de oranje punten (keyframes) direct naar de groene lijn (referenceKeyframes)
     if(referenceKeyframes.length > 0) {
         keyframes = JSON.parse(JSON.stringify(referenceKeyframes));
     }
-    
     ghostPoints = [];
     firstCycleDone = false;
     sync(true); 
@@ -223,7 +220,6 @@ const fromY=(y)=>(canvas.height/2 - y)*100/(canvas.height/2.2);
 function generateGhost() {
     const chaos = document.getElementById("chaosSlider").value / 100;
     if(chaos <= 0 || isPaused) { ghostPoints = []; return; }
-    // Gebruik altijd de reference (groene lijn) als basis voor chaos
     const source = referenceKeyframes.length > 0 ? referenceKeyframes : keyframes;
     ghostPoints = source.map((p, i) => {
         if (i === 0 || i === source.length - 1) return { ...p };
@@ -248,7 +244,6 @@ function markSaved(name){
     const sel = document.getElementById("presetSelect");
     for(let i=0; i<sel.options.length; i++) { if(sel.options[i].value === name) sel.selectedIndex = i; }
     currentOpenFile = name; document.getElementById("currentFileDisplay").innerText = name ? " - " + name : "";
-    // Bij opslaan of laden wordt de huidige staat de nieuwe Groene Referentielijn
     referenceKeyframes = JSON.parse(JSON.stringify(keyframes));
 }
 
@@ -273,7 +268,6 @@ function draw(){
     }
     lastElapsed = elapsed;
 
-    // Teken de groene referentielijn
     if (referenceKeyframes.length > 1) {
         ctx.strokeStyle="rgba(40, 167, 69, 0.5)"; ctx.lineWidth=2; ctx.beginPath();
         referenceKeyframes.forEach((p,i)=> i?ctx.lineTo(toX(p.time),toY(p.value)):ctx.moveTo(toX(p.time),toY(p.value))); ctx.stroke();
@@ -400,8 +394,9 @@ async function deletePreset(){
     const name = document.getElementById("presetSelect").value;
     if(!name || name === "" || isLocked() || !await openModal("Verwijder '"+name+"' definitief?")) return;
     await fetch('/delete?name='+name, {method:'DELETE'});
-    currentOpenFile = ""; const newList = await updatePresetList();
-    if(newList.length > 0) autoLoadPreset(newList[0]); else createNew();
+    currentOpenFile = ""; 
+    const newList = await updatePresetList(""); 
+    if(newList && newList.length > 0) { autoLoadPreset(newList[0]); } else { createNew(); }
 }
 
 function createNew(){ if(isLocked()) return; keyframes=[{time:0,value:0},{time:8000,value:0}]; markSaved(""); updatePresetList(); sync(true); stopAndReset(); }
@@ -442,13 +437,20 @@ function updateDuration(){
 function applyJson(){ if(isLocked()) return; try{const data=JSON.parse(editor.value); keyframes=data.keyframes || data; markUnsaved(); sync();}catch(e){} }
 
 async function init(){
-    const [dataRes, nameRes, listRes, pauseRes] = await Promise.all([ fetch('/get_active'), fetch('/get_active_name'), fetch('/list'), fetch('/get_pause_state') ]);
+    const [dataRes, nameRes, listRes, pauseRes] = await Promise.all([ 
+        fetch('/get_active'), 
+        fetch('/get_active_name'), 
+        fetch('/list'), 
+        fetch('/get_pause_state') 
+    ]);
     const data = await dataRes.json(), activeName = await nameRes.text(), list = await listRes.json();
     isPaused = (await pauseRes.text() == "1"); updatePlayButtonUI();
     keyframes = data.keyframes || data; 
-    const validatedName = list.includes(activeName) ? activeName : ""; 
-    await updatePresetList(validatedName); 
-    markSaved(validatedName);
+    
+    // Herstel menu selectie
+    await updatePresetList(activeName); 
+    markSaved(activeName);
+    
     document.getElementById("chaosSlider").value = data.chaos || 0; updateChaosLabel();
     playStart = Date.now() - parseInt(await (await fetch('/get_time')).text()); sync(true); draw();
 }
@@ -472,9 +474,7 @@ void setup() {
   Serial.begin(115200); 
   for (int i = 0; i < 4; i++) pinMode(motorPins[i], OUTPUT); 
   LittleFS.begin(true);
-  if (LittleFS.exists("/active.json")) {
-    loadFromJSON(LittleFS.open("/active.json", "r").readString());
-  }
+  if (LittleFS.exists("/active.json")) { loadFromJSON(LittleFS.open("/active.json", "r").readString()); }
   isPaused = false; 
   startTime = millis();
   WiFi.mode(WIFI_AP_STA); WiFi.softAP(ap_ssid, ap_pass); WiFi.begin(ssid_home, pass_home); MDNS.begin(mdns_name);
