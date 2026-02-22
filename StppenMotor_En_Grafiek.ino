@@ -37,7 +37,7 @@ const char* htmlPage PROGMEM = R"rawliteral(
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Stepper Pro v22.6 - Auto-Play</title>
+<title>Stepper Pro v22.7 - Smart Reset</title>
 <style>
   :root {
     --bg-dark: #121212;
@@ -58,7 +58,6 @@ const char* htmlPage PROGMEM = R"rawliteral(
   .controls { background: var(--bg-panel); padding: 15px; border-radius: 8px; display: flex; flex-direction: column; align-items: center; gap: 12px; margin: 0 auto; border: 1px solid var(--border); max-width: 1200px; box-sizing: border-box; box-shadow: 0 2px 10px rgba(0,0,0,0.3); transition: box-shadow 0.3s ease; }
   .control-row { display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; }
   
-  /* Rood gloei effect voor niet opgeslagen wijzigingen */
   .unsaved-glow { 
     border-color: var(--danger) !important;
     box-shadow: 0 0 15px rgba(255, 68, 68, 0.4);
@@ -144,7 +143,9 @@ const char* htmlPage PROGMEM = R"rawliteral(
 
 <script>
 const canvas=document.getElementById("envelopeCanvas"), ctx=canvas.getContext("2d"), editor=document.getElementById("jsonEditor");
-let keyframes=[{time:0,value:0},{time:8000,value:0}], originalKeyframes=[];
+let keyframes=[{time:0,value:0},{time:8000,value:0}];
+let originalKeyframes=[]; // Bron voor reset waarden
+let referenceKeyframes=[]; // Groene lijn
 let selectedPoints=[];
 let draggingPoint=null, lastMouseX=0, lastMouseY=0, historyStack = [];
 let playStart=Date.now(), isUnsaved=false, currentOpenFile="";
@@ -201,7 +202,14 @@ async function stopAndReset() {
     updatePlayButtonUI(); 
     pausedTime = 0; 
     playStart = Date.now(); 
-    if(originalKeyframes.length > 0) { keyframes = JSON.parse(JSON.stringify(originalKeyframes)); }
+    
+    // Reset waarden punten (Y-as), maar behoud huidige tijden (X-as)
+    if(originalKeyframes.length > 0) {
+        keyframes.forEach((kp, i) => {
+            if(originalKeyframes[i]) kp.value = originalKeyframes[i].value;
+        });
+    }
+    
     ghostPoints = [];
     firstCycleDone = false;
     sync(true); 
@@ -234,7 +242,6 @@ function generateGhost() {
 function markUnsaved(){ 
     isUnsaved=true; 
     document.getElementById("mainControls").classList.add("unsaved-glow");
-    originalKeyframes = JSON.parse(JSON.stringify(keyframes)); 
 }
 
 function markSaved(name){ 
@@ -244,9 +251,11 @@ function markSaved(name){
     for(let i=0; i<sel.options.length; i++) { if(sel.options[i].value === name) sel.selectedIndex = i; }
     currentOpenFile = name; document.getElementById("currentFileDisplay").innerText = name ? " - " + name : "";
     originalKeyframes = JSON.parse(JSON.stringify(keyframes));
+    referenceKeyframes = JSON.parse(JSON.stringify(keyframes));
 }
 
 function getExportData() { return { chaos: parseInt(document.getElementById("chaosSlider").value), keyframes: keyframes.map(kp => ({time: Math.round(kp.time), value: Math.round(kp.value * 100) / 100})) }; }
+
 function sync(skipGhost=false){ 
     const data = getExportData();
     editor.value = JSON.stringify(data, null, 2);
@@ -258,28 +267,40 @@ function sync(skipGhost=false){
 function draw(){
     ctx.clearRect(0,0,canvas.width,canvas.height);
     ctx.strokeStyle="#333"; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(0,canvas.height/2); ctx.lineTo(canvas.width,canvas.height/2); ctx.stroke();
+    
     let dur=keyframes[keyframes.length-1].time, elapsed = (isPaused ? pausedTime : (Date.now()-playStart)%dur);
     if (!isPaused && elapsed < lastElapsed) {
         if(firstCycleDone && ghostPoints.length > 0) { keyframes = [...ghostPoints]; fetch('/set_live',{method:'POST',body:JSON.stringify(getExportData())}); }
         firstCycleDone = true; generateGhost();
     }
     lastElapsed = elapsed;
+
+    // Groene lijn
+    if (referenceKeyframes.length > 1) {
+        ctx.strokeStyle="rgba(40, 167, 69, 0.4)"; ctx.lineWidth=2; ctx.beginPath();
+        referenceKeyframes.forEach((p,i)=> i?ctx.lineTo(toX(p.time),toY(p.value)):ctx.moveTo(toX(p.time),toY(p.value))); ctx.stroke();
+    }
+
     if (firstCycleDone && ghostPoints.length > 0) {
         ctx.strokeStyle="rgba(0, 191, 255, 0.2)"; ctx.lineWidth=2; ctx.setLineDash([5, 5]); ctx.beginPath();
         ghostPoints.forEach((p,i)=> i?ctx.lineTo(toX(p.time),toY(p.value)):ctx.moveTo(toX(p.time),toY(p.value))); ctx.stroke(); ctx.setLineDash([]);
     }
+
     ctx.strokeStyle="#00bfff"; ctx.lineWidth=3; ctx.beginPath();
     keyframes.forEach((p,i)=> i?ctx.lineTo(toX(p.time),toY(p.value)):ctx.moveTo(toX(p.time),toY(p.value))); ctx.stroke();
+
     keyframes.forEach(p => {
         const isSelected = selectedPoints.includes(p); ctx.beginPath(); ctx.arc(toX(p.time), toY(p.value), 6, 0, 7);
         ctx.fillStyle = isSelected ? "#ffffff" : "#ff9900"; ctx.fill();
         if(isSelected) { ctx.strokeStyle = "#00bfff"; ctx.lineWidth = 2; ctx.stroke(); }
     });
+
     if(isSelectingBox && hasMovedForBox) {
         ctx.fillStyle = "rgba(0, 191, 255, 0.2)"; ctx.strokeStyle = "#00bfff"; ctx.setLineDash([5, 5]);
         ctx.fillRect(boxStart.x, boxStart.y, boxEnd.x - boxStart.x, boxEnd.y - boxStart.y);
         ctx.strokeRect(boxStart.x, boxStart.y, boxEnd.x - boxStart.x, boxEnd.y - boxStart.y); ctx.setLineDash([]);
     }
+
     ctx.strokeStyle="red"; ctx.lineWidth=3; ctx.beginPath(); ctx.moveTo(toX(elapsed),0); ctx.lineTo(toX(elapsed),canvas.height); ctx.stroke();
     requestAnimationFrame(draw);
 }
@@ -358,8 +379,11 @@ async function autoLoadPreset(targetName){
     if(!name || name === "" || isLocked()) return;
     if(isUnsaved && !targetName && !await openModal("Wijzigingen gaan verloren. Doorgaan?")){ document.getElementById("presetSelect").value = currentOpenFile || ""; return; }
     const res = await fetch('/load?name='+name); if(!res.ok) return;
-    const data = await res.json(); keyframes = data.keyframes || data; document.getElementById("chaosSlider").value = data.chaos || 0;
-    updateChaosLabel(); firstCycleDone = false; ghostPoints = []; selectedPoints = []; historyStack = []; markSaved(name); await sync(true); stopAndReset();
+    const data = await res.json(); 
+    keyframes = data.keyframes || data; 
+    markSaved(name); // Dit stelt ook original en reference in
+    document.getElementById("chaosSlider").value = data.chaos || 0;
+    updateChaosLabel(); firstCycleDone = false; ghostPoints = []; selectedPoints = []; historyStack = []; await sync(true); stopAndReset();
 }
 
 async function updatePresetList(targetName){
@@ -376,7 +400,7 @@ async function deletePreset(){
     if(newList.length > 0) autoLoadPreset(newList[0]); else createNew();
 }
 
-function createNew(){ if(isLocked()) return; keyframes=[{time:0,value:0},{time:8000,value:0}]; selectedPoints=[]; historyStack=[]; markSaved(""); updatePresetList(); sync(true); stopAndReset(); }
+function createNew(){ if(isLocked()) return; keyframes=[{time:0,value:0},{time:8000,value:0}]; markSaved(""); updatePresetList(); sync(true); stopAndReset(); }
 function performSave(n){ fetch('/save?name='+n,{method:'POST',body:JSON.stringify(getExportData())}).then(()=>{markSaved(n);updatePresetList(n);}); }
 async function saveCurrent(){ if(isLocked()) return; if(!currentOpenFile) saveAs(); else if(await openModal("Bestand '" + currentOpenFile + "' overschrijven?")) performSave(currentOpenFile); }
 async function saveAs(){ if(isLocked()) return; let n=await openModal("Sla configuratie op als:", true); if(n && typeof n === 'string') performSave(n.trim().replace(/[^a-z0-9_-]/gi,'_')); }
@@ -391,25 +415,41 @@ async function handleFileUpload(event){
             const list = await (await fetch('/list')).json();
             if(list.includes(name) && !await openModal("Bestand '"+name+"' bestaat al op de ESP. Overschrijven?")) return;
             await fetch('/save?name='+name,{method:'POST',body:JSON.stringify(data)});
-            keyframes=data.keyframes || data; selectedPoints=[]; historyStack=[]; markSaved(name); await updatePresetList(name); await sync(true); stopAndReset();
-        }catch(err){alert("Fout");}
+            keyframes=data.keyframes || data; 
+            selectedPoints=[]; historyStack=[]; markSaved(name); await updatePresetList(name); await sync(true); stopAndReset();
+        } catch(err){alert("Fout");}
     };
     reader.readAsText(file); event.target.value="";
 }
 
 function downloadConfig(){ const a=document.createElement('a'); a.href="data:text/json;charset=utf-8,"+encodeURIComponent(JSON.stringify(getExportData(),null,2)); a.download=(currentOpenFile || "config")+".json"; a.click(); }
+
 function updateDuration(){ 
-    saveToHistory(); const oldDur = keyframes[keyframes.length-1].time, newDur = document.getElementById("totalTime").value * 1000;
-    const factor = newDur / oldDur; keyframes.forEach(p => { p.time = Math.round(p.time * factor); }); markUnsaved(); sync(); 
+    saveToHistory(); 
+    const oldDur = keyframes[keyframes.length-1].time;
+    const newDur = document.getElementById("totalTime").value * 1000;
+    const factor = newDur / oldDur;
+    
+    // Schaalt alles qua tijd
+    keyframes.forEach(p => { p.time = Math.round(p.time * factor); }); 
+    originalKeyframes.forEach(p => { p.time = Math.round(p.time * factor); }); 
+    referenceKeyframes.forEach(p => { p.time = Math.round(p.time * factor); }); 
+    
+    markUnsaved(); 
+    sync(); 
 }
+
 function applyJson(){ if(isLocked()) return; try{const data=JSON.parse(editor.value); keyframes=data.keyframes || data; markUnsaved(); sync();}catch(e){} }
 
 async function init(){
     const [dataRes, nameRes, listRes, pauseRes] = await Promise.all([ fetch('/get_active'), fetch('/get_active_name'), fetch('/list'), fetch('/get_pause_state') ]);
     const data = await dataRes.json(), activeName = await nameRes.text(), list = await listRes.json();
     isPaused = (await pauseRes.text() == "1"); updatePlayButtonUI();
-    keyframes = data.keyframes || data; document.getElementById("chaosSlider").value = data.chaos || 0; updateChaosLabel();
-    const validatedName = list.includes(activeName) ? activeName : ""; await updatePresetList(validatedName); markSaved(validatedName);
+    keyframes = data.keyframes || data; 
+    const validatedName = list.includes(activeName) ? activeName : ""; 
+    await updatePresetList(validatedName); 
+    markSaved(validatedName);
+    document.getElementById("chaosSlider").value = data.chaos || 0; updateChaosLabel();
     playStart = Date.now() - parseInt(await (await fetch('/get_time')).text()); sync(true); draw();
 }
 init();
