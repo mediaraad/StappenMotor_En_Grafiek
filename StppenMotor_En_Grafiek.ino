@@ -201,7 +201,8 @@ async function stopAndReset() {
     isPaused = true; 
     updatePlayButtonUI(); 
     pausedTime = 0; 
-    playStart = Date.now(); 
+    playStart = Date.now();
+    if(referenceKeyframes.length > 0) keyframes = JSON.parse(JSON.stringify(referenceKeyframes));
     referenceKeyframes = JSON.parse(JSON.stringify(keyframes));
     ghostPoints = [];
     firstCycleDone = false;
