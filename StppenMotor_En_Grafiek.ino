@@ -37,7 +37,7 @@ const char* htmlPage PROGMEM = R"rawliteral(
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Stepper Pro v22.8.5 - Reboot Menu Fix</title>
+<title>Stepper Pro</title>
 <style>
   :root {
     --bg-dark: #121212;
@@ -81,7 +81,7 @@ const char* htmlPage PROGMEM = R"rawliteral(
 
   #currentFileDisplay { color: #00ff00; margin-left: 10px; }
   
-  textarea { width: 100%; max-width: 1200px; height: 120px; background: #1e1e1e; color: #00ff00; border: 1px solid var(--border); font-family: monospace; margin: 20px auto 0 auto; padding: 10px; border-radius: 8px; box-sizing: border-box; display: block; }
+  textarea { width: 100%; max-width: 1200px; height: 120px; background: #1e1e1e; color: #00ff00; border: 1px solid var(--border); font-family: monospace; margin: 20px auto 0 auto; padding: 10px; border-radius: 8px; box-sizing: border-box; display: block; resize: vertical; }
   .slider-group { display: flex; align-items: center; gap: 5px; background: #333; padding: 0 10px; border-radius: 4px; height: 42px; }
   
   .locked-ui { opacity: 0.5; pointer-events: none; filter: grayscale(50%); }
@@ -150,6 +150,7 @@ let draggingPoint=null, lastMouseX=0, lastMouseY=0, historyStack = [];
 let playStart=Date.now(), isUnsaved=false, currentOpenFile="";
 let ghostPoints = [], lastElapsed = 0, firstCycleDone = false, pausedTime = 0, isPaused = false; 
 let isSelectingBox = false, hasMovedForBox = false, boxStart = {x:0, y:0}, boxEnd = {x:0, y:0};
+let highlightedIndex = -1;
 
 function isLocked() { return !isPaused; }
 
@@ -201,9 +202,7 @@ async function stopAndReset() {
     updatePlayButtonUI(); 
     pausedTime = 0; 
     playStart = Date.now(); 
-    if(referenceKeyframes.length > 0) {
-        keyframes = JSON.parse(JSON.stringify(referenceKeyframes));
-    }
+    referenceKeyframes = JSON.parse(JSON.stringify(keyframes));
     ghostPoints = [];
     firstCycleDone = false;
     sync(true); 
@@ -253,13 +252,33 @@ function sync(skipGhost=false){
     const data = getExportData();
     editor.value = JSON.stringify(data, null, 2);
     document.getElementById("totalTime").value = (keyframes[keyframes.length-1].time/1000).toFixed(2);
+    if(isPaused) referenceKeyframes = JSON.parse(JSON.stringify(keyframes));
     if(firstCycleDone && !skipGhost) generateGhost();
     return fetch('/set_live', {method:'POST', body:JSON.stringify(data)}); 
 }
 
+// ─── JSON editor cursor → highlight keyframe ──────────────────────────────────
+function syncEditorCursor() {
+    if (isLocked()) return;
+    try {
+        const pos = editor.selectionStart;
+        const textBefore = editor.value.substring(0, pos);
+        const matches = textBefore.match(/"time"/g);
+        highlightedIndex = matches ? matches.length - 1 : -1;
+    } catch(e) { highlightedIndex = -1; }
+}
+
+editor.addEventListener('keyup',   syncEditorCursor);
+editor.addEventListener('click',   syncEditorCursor);
+editor.addEventListener('mouseup', syncEditorCursor);
+editor.addEventListener('blur',    () => { highlightedIndex = -1; });
+
 function draw(){
     ctx.clearRect(0,0,canvas.width,canvas.height);
     ctx.strokeStyle="#333"; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(0,canvas.height/2); ctx.lineTo(canvas.width,canvas.height/2); ctx.stroke();
+
+    ctx.fillStyle="rgba(255,255,255,0.2)"; ctx.font="16px sans-serif"; ctx.textAlign="left";
+    ctx.fillText("CW", 10, 24); ctx.fillText("Stil", 10, canvas.height/2-10); ctx.fillText("CCW", 10, canvas.height-10);
     
     let dur=keyframes[keyframes.length-1].time, elapsed = (isPaused ? pausedTime : (Date.now()-playStart)%dur);
     if (!isPaused && elapsed < lastElapsed) {
@@ -281,10 +300,17 @@ function draw(){
     ctx.strokeStyle="#00bfff"; ctx.lineWidth=3; ctx.beginPath();
     keyframes.forEach((p,i)=> i?ctx.lineTo(toX(p.time),toY(p.value)):ctx.moveTo(toX(p.time),toY(p.value))); ctx.stroke();
 
-    keyframes.forEach(p => {
-        const isSelected = selectedPoints.includes(p); ctx.beginPath(); ctx.arc(toX(p.time), toY(p.value), 6, 0, 7);
-        ctx.fillStyle = isSelected ? "#ffffff" : "#ff9900"; ctx.fill();
-        if(isSelected) { ctx.strokeStyle = "#00bfff"; ctx.lineWidth = 2; ctx.stroke(); }
+    keyframes.forEach((p, i) => {
+        const isSelected = selectedPoints.includes(p);
+        const isHighlighted = i === highlightedIndex;
+        const radius = isHighlighted ? 10 : 6;
+        ctx.beginPath(); ctx.arc(toX(p.time), toY(p.value), radius, 0, Math.PI * 2);
+        ctx.fillStyle = isHighlighted ? "#ff00ff" : isSelected ? "#ffffff" : "#ff9900"; ctx.fill();
+        if(isSelected || isHighlighted) { ctx.strokeStyle = isHighlighted ? "#ff00ff" : "#00bfff"; ctx.lineWidth = 2; ctx.stroke(); }
+        if(isHighlighted) {
+            ctx.beginPath(); ctx.arc(toX(p.time), toY(p.value), radius + 5, 0, Math.PI * 2);
+            ctx.strokeStyle = "rgba(255,0,255,0.3)"; ctx.lineWidth = 3; ctx.stroke();
+        }
     });
 
     if(isSelectingBox && hasMovedForBox) {
@@ -344,7 +370,7 @@ window.onmouseup=(e)=>{
 
 window.onkeydown=(e)=>{
     if(e.ctrlKey && e.key === 'z') { e.preventDefault(); undo(); return; }
-    if(e.key === "Escape" || e.key === "Esc") { selectedPoints = []; return; }
+    if(e.key === "Escape" || e.key === "Esc") { selectedPoints = []; highlightedIndex = -1; return; }
     if(isLocked() || selectedPoints.length === 0 || document.activeElement === editor) return;
     let changed = false; const key = e.key.toLowerCase();
     if(e.key === "Delete" || e.key === "Backspace") {
@@ -381,7 +407,9 @@ async function autoLoadPreset(targetName){
     keyframes = data.keyframes || data; 
     markSaved(name);
     document.getElementById("chaosSlider").value = data.chaos || 0;
-    updateChaosLabel(); firstCycleDone = false; ghostPoints = []; selectedPoints = []; historyStack = []; await sync(true); stopAndReset();
+    updateChaosLabel(); firstCycleDone = false; ghostPoints = []; selectedPoints = []; historyStack = [];
+    highlightedIndex = -1;
+    await sync(true); stopAndReset();
 }
 
 async function updatePresetList(targetName){
@@ -399,7 +427,7 @@ async function deletePreset(){
     if(newList && newList.length > 0) { autoLoadPreset(newList[0]); } else { createNew(); }
 }
 
-function createNew(){ if(isLocked()) return; keyframes=[{time:0,value:0},{time:8000,value:0}]; markSaved(""); updatePresetList(); sync(true); stopAndReset(); }
+function createNew(){ if(isLocked()) return; keyframes=[{time:0,value:0},{time:8000,value:0}]; highlightedIndex=-1; markSaved(""); updatePresetList(); sync(true); stopAndReset(); }
 function performSave(n){ fetch('/save?name='+n,{method:'POST',body:JSON.stringify(getExportData())}).then(()=>{markSaved(n);updatePresetList(n);}); }
 async function saveCurrent(){ if(isLocked()) return; if(!currentOpenFile) saveAs(); else if(await openModal("Bestand '" + currentOpenFile + "' overschrijven?")) performSave(currentOpenFile); }
 async function saveAs(){ if(isLocked()) return; let n=await openModal("Sla configuratie op als:", true); if(n && typeof n === 'string') performSave(n.trim().replace(/[^a-z0-9_-]/gi,'_')); }
@@ -415,7 +443,7 @@ async function handleFileUpload(event){
             if(list.includes(name) && !await openModal("Bestand '"+name+"' bestaat al op de ESP. Overschrijven?")) return;
             await fetch('/save?name='+name,{method:'POST',body:JSON.stringify(data)});
             keyframes=data.keyframes || data; 
-            selectedPoints=[]; historyStack=[]; markSaved(name); await updatePresetList(name); await sync(true); stopAndReset();
+            selectedPoints=[]; historyStack=[]; highlightedIndex=-1; markSaved(name); await updatePresetList(name); await sync(true); stopAndReset();
         } catch(err){alert("Fout");}
     };
     reader.readAsText(file); event.target.value="";
@@ -446,11 +474,8 @@ async function init(){
     const data = await dataRes.json(), activeName = await nameRes.text(), list = await listRes.json();
     isPaused = (await pauseRes.text() == "1"); updatePlayButtonUI();
     keyframes = data.keyframes || data; 
-    
-    // Herstel menu selectie
     await updatePresetList(activeName); 
     markSaved(activeName);
-    
     document.getElementById("chaosSlider").value = data.chaos || 0; updateChaosLabel();
     playStart = Date.now() - parseInt(await (await fetch('/get_time')).text()); sync(true); draw();
 }
