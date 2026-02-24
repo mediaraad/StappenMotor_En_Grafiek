@@ -29,7 +29,13 @@ int envelopeSize = 2;
 unsigned long startTime = 0;
 unsigned long loopDuration = 8000;
 int currentSegment = 0; 
-bool isPaused = false; 
+bool isPaused = false;
+
+// ─── Debounce flash schrijven ─────────────────────────────────────────────────
+String pendingActiveJson = "";
+unsigned long pendingWriteTime = 0;
+bool pendingWrite = false;
+const unsigned long WRITE_DEBOUNCE_MS = 2000;
 
 const char* htmlPage PROGMEM = R"rawliteral(
 <!DOCTYPE html>
@@ -493,6 +499,7 @@ void loadFromJSON(String json) {
   envelopeSize = min((int)arr.size(), 50);
   for (int i = 0; i < envelopeSize; i++) { envelope[i].time = arr[i]["time"]; envelope[i].value = (float)arr[i]["value"]; }
   loopDuration = (envelopeSize > 1) ? envelope[envelopeSize - 1].time : 8000;
+  if (loopDuration == 0) loopDuration = 1;
   currentSegment = 0;
 }
 
@@ -508,14 +515,27 @@ void setup() {
   server.on("/get_time", [](){ server.send(200, "text/plain", String((millis() - startTime) % loopDuration)); });
   server.on("/get_pause_state", [](){ server.send(200, "text/plain", isPaused ? "1" : "0"); });
   server.on("/toggle_pause", [](){ if(server.hasArg("p")) isPaused = (server.arg("p") == "1"); if(server.hasArg("reset")) { startTime = millis(); currentSegment = 0; } server.send(200); });
-  server.on("/set_live", HTTP_POST, [](){ if(server.hasArg("plain")) { loadFromJSON(server.arg("plain")); File f = LittleFS.open("/active.json", "w"); f.print(server.arg("plain")); f.close(); } server.send(200); });
+
+  // /set_live: laad in geheugen, plan debounce write naar flash
+  server.on("/set_live", HTTP_POST, [](){
+    if(server.hasArg("plain")) {
+      loadFromJSON(server.arg("plain"));
+      pendingActiveJson = server.arg("plain");
+      pendingWriteTime = millis();
+      pendingWrite = true;
+    }
+    server.send(200);
+  });
+
   server.on("/save", HTTP_POST, [](){
     String name = server.arg("name"), data = server.arg("plain");
     File f1 = LittleFS.open("/" + name + ".json", "w"); f1.print(data); f1.close();
     File f2 = LittleFS.open("/active.json", "w"); f2.print(data); f2.close();
-    File f3 = LittleFS.open("/active_name.txt", "w"); f3.print(name); f3.close(); 
+    File f3 = LittleFS.open("/active_name.txt", "w"); f3.print(name); f3.close();
+    pendingWrite = false; // save heeft al geschreven, debounce niet meer nodig
     server.send(200);
   });
+
   server.on("/load", HTTP_GET, [](){ String name = server.arg("name"); File f = LittleFS.open("/" + name + ".json", "r"); if(f){ server.send(200, "application/json", f.readString()); f.close(); } else server.send(404); });
   server.on("/delete", HTTP_DELETE, [](){ String name = server.arg("name"); if(LittleFS.exists("/"+name+".json")) LittleFS.remove("/"+name+".json"); server.send(200); });
   server.on("/list", HTTP_GET, [](){
@@ -530,7 +550,16 @@ void setup() {
 }
 
 void loop() {
-  server.handleClient(); if (isPaused) { for (int i = 0; i < 4; i++) digitalWrite(motorPins[i], LOW); return; }
+  server.handleClient();
+
+  // ─── Debounce: schrijf active.json naar flash na 2 seconden stilte ───────────
+  if (pendingWrite && (millis() - pendingWriteTime >= WRITE_DEBOUNCE_MS)) {
+    File f = LittleFS.open("/active.json", "w");
+    if (f) { f.print(pendingActiveJson); f.close(); }
+    pendingWrite = false;
+  }
+
+  if (isPaused) { for (int i = 0; i < 4; i++) digitalWrite(motorPins[i], LOW); return; }
   unsigned long t = (millis() - startTime) % loopDuration; if (t < envelope[currentSegment].time) currentSegment = 0;
   while (currentSegment < envelopeSize - 1 && t > envelope[currentSegment + 1].time) currentSegment++;
   float f = (float)(t - envelope[currentSegment].time) / (envelope[currentSegment + 1].time - envelope[currentSegment].time);
